@@ -4,7 +4,14 @@
   "packageManager": "pnpm@10.4.1",
   "scripts": {
     "dev": "pnpm --filter web dev",
+    "dev:up": "bash ./dev-up.sh",
+    "dev:down": "bash ./dev-down.sh",
     "build": "pnpm --filter web build",
-    "lint": "pnpm --filter web lint"
+    "lint": "pnpm --filter web lint",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "vitest": "^3.2.4"
   }
 }

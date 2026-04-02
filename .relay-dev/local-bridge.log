@@ -1,0 +1,7 @@
+
+> local-bridge@0.0.1 dev /Users/ruska/project/web-cli/services/local-bridge
+> node --import tsx src/server.ts
+
+/Users/ruska/project/web-cli/services/local-bridge:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  local-bridge@0.0.1 dev: `node --import tsx src/server.ts`
+Command failed with signal "SIGTERM"

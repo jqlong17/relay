@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans, Noto_Sans_SC } from "next/font/google";
+import { IBM_Plex_Sans, JetBrains_Mono, Noto_Sans_SC } from "next/font/google";
 import { getUiCssVariables, loadUiConfig } from "@/config/ui.config";
 import "./globals.css";
 
@@ -9,7 +9,7 @@ const plexSans = IBM_Plex_Sans({
   weight: ["400", "500", "600"],
 });
 
-const plexMono = IBM_Plex_Mono({
+const plexMono = JetBrains_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
   weight: ["400", "500", "600"],

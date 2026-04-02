@@ -19,9 +19,9 @@ export function TopNav({ active, language }: TopNavProps) {
   const [appearanceContent, setAppearanceContent] = useState("");
   const [appearanceLoaded, setAppearanceLoaded] = useState(false);
   const [appearanceDirty, setAppearanceDirty] = useState(false);
-  const [appearanceState, setAppearanceState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle",
-  );
+  const [appearanceState, setAppearanceState] = useState<
+    "idle" | "saving" | "resetting" | "saved" | "error"
+  >("idle");
   const [isRefreshing, startRefresh] = useTransition();
 
   useEffect(() => {

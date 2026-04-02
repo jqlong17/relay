@@ -40,24 +40,34 @@ memoriesRightMinWidth = "420px"
 # 中间主内容区的横向内边距
 panelCenterXPadding = "40px"
 
+[color]
+# 主文本颜色
+text = "#e6ebf3"
+
+# 次级文本颜色
+textSoft = "#b4bdcb"
+
+# 更弱一级的辅助文本
+textDim = "#7f8897"
+
 [typography]
 # 最小一档 meta 字号：时间、状态、小标签
-metaXs = "0.68rem"
+metaXs = "0.72rem"
 
 # 常规 meta 字号：eyebrow、次级说明、文件树等
-meta = "0.72rem"
+meta = "0.76rem"
 
 # 小号正文：对话、输入框、次级正文
-uiSm = "0.76rem"
+uiSm = "0.82rem"
 
 # 常规正文
-ui = "0.8rem"
+ui = "0.86rem"
 
 # 导航和较重要列表项
-nav = "0.82rem"
+nav = "0.88rem"
 
 # 小标题
-titleSm = "0.94rem"
+titleSm = "0.98rem"
 
 # 页面级标题
-title = "1rem"
+title = "1.04rem"

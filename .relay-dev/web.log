@@ -1,0 +1,128 @@
+
+> web@0.1.0 dev /Users/ruska/project/web-cli/apps/web
+> next dev
+
+▲ Next.js 16.2.2 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://100.108.149.37:3000
+✓ Ready in 231ms
+
+ GET / 200 in 242ms (next.js: 161ms, application-code: 81ms)
+ GET / 200 in 235ms (next.js: 115ms, application-code: 121ms)
+ GET /api/bridge/workspaces 200 in 75ms (next.js: 34ms, application-code: 41ms)
+ GET /api/bridge/sessions 200 in 105ms (next.js: 54ms, application-code: 50ms)
+ GET /api/bridge/files/tree 200 in 29ms (next.js: 22ms, application-code: 7ms)
+ GET /api/bridge/sessions/019d5060-8f97-7f03-8d36-bafff923242b 200 in 478ms (next.js: 465ms, application-code: 13ms)
+ GET /api/bridge/sessions/019d505c-563a-77b0-a35e-9858bb6451df 200 in 25ms (next.js: 3ms, application-code: 22ms)
+ GET /api/bridge/sessions/019d504c-0922-7cd2-97fd-6ba4f897177a 200 in 31ms (next.js: 8ms, application-code: 23ms)
+ GET /api/bridge/sessions/019d5045-1b5e-7552-bcf4-2a38fa69f071 200 in 39ms (next.js: 12ms, application-code: 27ms)
+ GET /api/bridge/sessions/019d4bb8-b6db-7241-b076-93655aa529a2 200 in 94ms (next.js: 11ms, application-code: 83ms)
+ HEAD /mobile 200 in 46ms (next.js: 20ms, application-code: 26ms)
+ GET /mobile 200 in 16ms (next.js: 1599µs, application-code: 15ms)
+ POST /api/bridge/runtime/run?stream=1 500 in 58ms (next.js: 42ms, application-code: 16ms)
+ GET /mobile 200 in 42ms (next.js: 5ms, application-code: 37ms)
+⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "192.168.1.25".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['192.168.1.25'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+✓ Compiled in 100ms
+ GET /mobile 200 in 49ms (next.js: 10ms, application-code: 39ms)
+ GET /mobile 200 in 46ms (next.js: 5ms, application-code: 42ms)
+ GET /mobile 200 in 40ms (next.js: 5ms, application-code: 35ms)
+ GET /mobile 200 in 20ms (next.js: 1510µs, application-code: 19ms)
+ GET /api/bridge/workspaces 200 in 8ms (next.js: 2ms, application-code: 6ms)
+ GET /api/bridge/sessions 200 in 56ms (next.js: 1157µs, application-code: 54ms)
+ GET /mobile 200 in 23ms (next.js: 1554µs, application-code: 22ms)
+ GET /mobile 200 in 41ms (next.js: 3ms, application-code: 39ms)
+ GET / 200 in 51ms (next.js: 11ms, application-code: 40ms)
+ GET /api/bridge/workspaces 200 in 13ms (next.js: 3ms, application-code: 10ms)
+ GET /api/bridge/sessions 200 in 59ms (next.js: 7ms, application-code: 52ms)
+ GET /api/bridge/files/tree 200 in 12ms (next.js: 1653µs, application-code: 10ms)
+ GET /api/bridge/sessions/019d5060-8f97-7f03-8d36-bafff923242b 200 in 24ms (next.js: 8ms, application-code: 16ms)
+ GET /api/bridge/sessions/019d505c-563a-77b0-a35e-9858bb6451df 200 in 33ms (next.js: 5ms, application-code: 28ms)
+ GET /api/bridge/sessions/019d504c-0922-7cd2-97fd-6ba4f897177a 200 in 34ms (next.js: 11ms, application-code: 23ms)
+ GET /api/bridge/sessions/019d5045-1b5e-7552-bcf4-2a38fa69f071 200 in 55ms (next.js: 20ms, application-code: 34ms)
+ GET /api/bridge/sessions/019d4bb8-b6db-7241-b076-93655aa529a2 200 in 145ms (next.js: 26ms, application-code: 119ms)
+✓ Compiled in 260ms
+ GET / 200 in 89ms (next.js: 45ms, application-code: 44ms)
+ GET / 200 in 17ms (next.js: 1189µs, application-code: 16ms)
+ GET / 200 in 17ms (next.js: 1150µs, application-code: 16ms)
+ GET / 200 in 9ms (next.js: 1484µs, application-code: 7ms)
+ GET /mobile 200 in 135ms (next.js: 19ms, application-code: 116ms)
+ GET /mobile 200 in 69ms (next.js: 2ms, application-code: 66ms)
+✓ Compiled in 19ms
+ GET /mobile 200 in 104ms (next.js: 9ms, application-code: 95ms)
+ GET /mobile 200 in 92ms (next.js: 4ms, application-code: 88ms)
+ GET /mobile 200 in 75ms (next.js: 5ms, application-code: 70ms)
+ GET /mobile 200 in 95ms (next.js: 5ms, application-code: 89ms)
+ GET /mobile 200 in 73ms (next.js: 3ms, application-code: 70ms)
+ GET /mobile 200 in 74ms (next.js: 3ms, application-code: 71ms)
+ GET /mobile 200 in 101ms (next.js: 6ms, application-code: 95ms)
+ GET / 200 in 103ms (next.js: 45ms, application-code: 58ms)
+ GET / 200 in 24ms (next.js: 1701µs, application-code: 22ms)
+ GET / 200 in 13ms (next.js: 1914µs, application-code: 11ms)
+ GET / 200 in 90ms (next.js: 33ms, application-code: 56ms)
+ GET / 200 in 29ms (next.js: 4ms, application-code: 25ms)
+✓ Compiled in 66ms
+✓ Compiled in 18ms
+ GET /mobile 200 in 151ms (next.js: 22ms, application-code: 129ms)
+ GET /mobile 200 in 106ms (next.js: 5ms, application-code: 101ms)
+✓ Compiled in 27ms
+ GET /mobile 200 in 81ms (next.js: 6ms, application-code: 74ms)
+✓ Compiled in 35ms
+ GET /mobile 200 in 85ms (next.js: 4ms, application-code: 81ms)
+ GET /mobile 200 in 74ms (next.js: 3ms, application-code: 71ms)
+ GET /mobile 200 in 75ms (next.js: 3ms, application-code: 72ms)
+ GET /mobile 200 in 73ms (next.js: 10ms, application-code: 63ms)
+ GET /mobile 200 in 53ms (next.js: 1583µs, application-code: 52ms)
+ GET /mobile 200 in 83ms (next.js: 3ms, application-code: 80ms)
+ GET /mobile 200 in 64ms (next.js: 3ms, application-code: 61ms)
+ GET /mobile 200 in 68ms (next.js: 4ms, application-code: 64ms)
+ GET /mobile 200 in 140ms (next.js: 15ms, application-code: 126ms)
+✓ Compiled in 34ms
+ GET / 200 in 56ms (next.js: 4ms, application-code: 52ms)
+ GET /api/bridge/workspaces 200 in 70ms (next.js: 29ms, application-code: 42ms)
+ GET /api/bridge/sessions 200 in 117ms (next.js: 60ms, application-code: 56ms)
+ GET /api/bridge/files/tree 200 in 48ms (next.js: 33ms, application-code: 15ms)
+ GET /api/bridge/sessions/019d5060-8f97-7f03-8d36-bafff923242b 200 in 48ms (next.js: 25ms, application-code: 23ms)
+ GET /api/bridge/sessions/019d505c-563a-77b0-a35e-9858bb6451df 200 in 27ms (next.js: 11ms, application-code: 16ms)
+ GET /api/bridge/sessions/019d504c-0922-7cd2-97fd-6ba4f897177a 200 in 27ms (next.js: 17ms, application-code: 9ms)
+ GET / 200 in 81ms (next.js: 1473µs, application-code: 80ms)
+ GET /api/bridge/workspaces 200 in 11ms (next.js: 2ms, application-code: 9ms)
+ GET /api/bridge/sessions 200 in 97ms (next.js: 5ms, application-code: 91ms)
+ GET /api/bridge/files/tree 200 in 6ms (next.js: 1659µs, application-code: 5ms)
+ GET /api/bridge/sessions/019d5060-8f97-7f03-8d36-bafff923242b 200 in 12ms (next.js: 1120µs, application-code: 11ms)
+ GET /api/bridge/sessions/019d505c-563a-77b0-a35e-9858bb6451df 200 in 16ms (next.js: 3ms, application-code: 13ms)
+ GET /api/bridge/sessions/019d504c-0922-7cd2-97fd-6ba4f897177a 200 in 18ms (next.js: 5ms, application-code: 13ms)
+ GET /api/bridge/sessions/019d5045-1b5e-7552-bcf4-2a38fa69f071 200 in 31ms (next.js: 8ms, application-code: 24ms)
+ GET /api/bridge/sessions/019d4bb8-b6db-7241-b076-93655aa529a2 200 in 105ms (next.js: 10ms, application-code: 95ms)
+✓ Compiled in 21ms
+ GET /api/bridge/workspaces 200 in 19ms (next.js: 4ms, application-code: 15ms)
+✓ Compiled in 123ms
+ GET /api/bridge/sessions 200 in 59ms (next.js: 12ms, application-code: 47ms)
+ GET /api/bridge/files/tree 200 in 7ms (next.js: 1303µs, application-code: 5ms)
+ GET / 200 in 51ms (next.js: 11ms, application-code: 41ms)
+ GET /api/bridge/workspaces 200 in 13ms (next.js: 2ms, application-code: 11ms)
+ GET /api/bridge/sessions 200 in 47ms (next.js: 5ms, application-code: 42ms)
+ GET /api/bridge/files/tree 200 in 9ms (next.js: 3ms, application-code: 7ms)
+ GET /api/bridge/sessions/019d5060-8f97-7f03-8d36-bafff923242b 200 in 17ms (next.js: 4ms, application-code: 13ms)
+ GET /api/bridge/sessions/019d505c-563a-77b0-a35e-9858bb6451df 200 in 30ms (next.js: 3ms, application-code: 27ms)
+ GET /api/bridge/sessions/019d504c-0922-7cd2-97fd-6ba4f897177a 200 in 32ms (next.js: 6ms, application-code: 26ms)
+ GET /api/bridge/sessions/019d5045-1b5e-7552-bcf4-2a38fa69f071 200 in 59ms (next.js: 9ms, application-code: 50ms)
+ GET /api/bridge/sessions/019d4bb8-b6db-7241-b076-93655aa529a2 200 in 185ms (next.js: 18ms, application-code: 167ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fapp%2Fsessions%2Fpage.tsx 200 in 51ms (next.js: 43ms, application-code: 8ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fapp%2Fsessions%2Fpage.tsx 200 in 12ms (next.js: 3ms, application-code: 9ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fcomponents%2Fsessions-client.tsx 200 in 14ms (next.js: 3ms, application-code: 11ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fcomponents%2Fsessions-client.tsx 200 in 12ms (next.js: 3ms, application-code: 10ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fcomponents%2Fsessions-client.tsx 200 in 13ms (next.js: 3ms, application-code: 9ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fapp%2Fsessions%2Fpage.tsx 200 in 11ms (next.js: 3ms, application-code: 9ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fapp%2Fsessions%2Fpage.tsx 200 in 12ms (next.js: 4ms, application-code: 8ms)
+ GET /api/bridge/files/content?path=%2FUsers%2Fruska%2Fproject%2Fweb-cli%2Fapps%2Fweb%2Fsrc%2Fapp%2Fglobals.css 200 in 21ms (next.js: 4ms, application-code: 17ms)
+ GET /mobile 200 in 110ms (next.js: 11ms, application-code: 99ms)

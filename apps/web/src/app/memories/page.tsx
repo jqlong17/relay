@@ -61,7 +61,7 @@ export default function MemoriesPage() {
                     {month.days.map((day) => (
                       <button
                         className={`calendar-day calendar-day-${day.level} ${
-                          day.active ? "calendar-day-active" : ""
+                          "active" in day && day.active ? "calendar-day-active" : ""
                         }`}
                         key={`${month.label}-${day.day}`}
                         type="button"
