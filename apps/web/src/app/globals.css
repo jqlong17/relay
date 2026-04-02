@@ -544,7 +544,7 @@ code,
 }
 
 .workspace-log-item-system {
-  max-width: var(--workspace-system-message-max-width);
+  max-width: var(--workspace-message-max-width);
   justify-self: start;
   background: var(--surface-1);
 }
