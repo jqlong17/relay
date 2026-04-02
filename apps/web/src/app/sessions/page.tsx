@@ -1,100 +1,82 @@
 import { TopNav } from "@/components/top-nav";
 
-const groups = [
+const sessionGroups = [
   {
-    title: "today",
-    items: ["running now", "waiting review", "recently finished"],
+    workspace: "web-cli",
+    branch: "main",
+    items: [
+      { title: "Refine Relay workspace shell", time: "10m ago", active: true },
+      { title: "Define V1 TDD execution plan", time: "1h ago" },
+    ],
   },
   {
-    title: "filters",
-    items: ["workspace:web-cli", "status:running", "files changed", "has memory"],
-  },
-];
-
-const sessions = [
-  {
-    title: "Refine Relay workspace shell",
-    status: "running",
-    summary: "tightened typography, reduced sidebar width, aligned left rail with terminal-style index.",
-    time: "10m ago",
-    workspace: "relay / web-cli",
-    files: 3,
-    turns: 14,
-    memory: "candidate",
+    workspace: "codex",
+    branch: "main",
+    items: [
+      { title: "Inspect app-server protocol", time: "2h ago" },
+      { title: "Compare cli integration paths", time: "3h ago" },
+    ],
   },
   {
-    title: "Define V1 TDD execution plan",
-    status: "done",
-    summary: "wrote staged plan for web app, bridge service, tests, and visual constraints.",
-    time: "1h ago",
-    workspace: "relay / web-cli",
-    files: 2,
-    turns: 9,
-    memory: "saved",
-  },
-  {
-    title: "Name exploration for product brand",
-    status: "done",
-    summary: "compared Roam vs Relay and locked the product narrative around continuity and handoff.",
-    time: "2h ago",
-    workspace: "relay / web-cli",
-    files: 1,
-    turns: 11,
-    memory: "saved",
-  },
-  {
-    title: "Initial product discovery",
-    status: "done",
-    summary: "clarified local-first agent workspace, three-pane layout, and app-server integration direction.",
-    time: "4h ago",
-    workspace: "relay / web-cli",
-    files: 1,
-    turns: 18,
-    memory: "pending",
+    workspace: "design-notes",
+    branch: "feature/notes",
+    items: [{ title: "Relay naming archive", time: "yesterday" }],
   },
 ];
 
 const selectedSession = {
   title: "Refine Relay workspace shell",
-  startedAt: "2026-04-02 09:05",
-  lastActivity: "2026-04-02 10:00",
-  branch: "main",
-  workspace: "/Users/ruska/project/web-cli",
-  summary:
-    "This session converged the visual style toward a colder, quieter terminal-document aesthetic and established that the next step is API and data model design.",
-  outputs: [
-    "Adjusted top navigation height and typography",
-    "Converted left rail into grouped index with active marker",
-    "Reduced left panel width by roughly one third",
+  workspace: "relay / web-cli",
+  turns: [
+    {
+      role: "user",
+      body: "我希望这个页面更接近截图里的风格，简洁、冷静、优雅。",
+    },
+    {
+      role: "assistant",
+      body:
+        "当前问题主要是字体过大、卡片感过强、层级太松。我会先压缩字号和间距，再把左侧改成更像目录的结构。",
+    },
+    {
+      role: "user",
+      body: "左侧激活的 session 需要左边有一条细条，session 文本不要换行。",
+    },
+    {
+      role: "assistant",
+      body:
+        "收到。我会把激活态收成终端目录风格，同时把 session 标题改成单行截断，branch 放回 workspace 层级。",
+    },
+    {
+      role: "user",
+      body: "右侧默认显示文件树，diff 和多余文案先删除。",
+    },
+    {
+      role: "assistant",
+      body:
+        "已调整。workspace 页面现在是 workspace 分组下的 session 列表，中间输入框贴底，右侧默认只保留文件树。",
+    },
   ],
 };
 
 const memoryChat = [
   {
     role: "system",
-    title: "system template",
-    body: "Generate durable memory from the selected session. Prefer project rules, style constraints, and repeatable workflow habits over temporary implementation details.",
-  },
-  {
-    role: "assistant",
-    title: "draft candidates",
-    body: "I found three likely memories: keep Relay visually quiet and typography-led; keep files contextual inside workspace; use sessions as the source material for memory generation rather than storing memory ad hoc.",
+    title: "system",
+    body:
+      "You are organizing durable memory from one or more sessions. Keep product rules, UI constraints, and workflow habits. Exclude one-off implementation details.",
   },
   {
     role: "user",
-    title: "user prompt",
-    body: "Keep only the product-level and UI-level memory. Ignore one-off implementation details from this session.",
+    title: "user",
+    body:
+      "@Refine Relay workspace shell @Define V1 TDD execution plan 帮我整理成长期有效的产品记忆，重点保留 UI 风格和 workflow 约束。",
   },
   {
     role: "assistant",
-    title: "refined draft",
-    body: "Understood. I would keep two durable memories from this session and leave the rest as transient notes.",
+    title: "assistant",
+    body:
+      "我会合并这两个 session，只保留长期有效的约束：1. Relay UI 应保持冷静、低装饰、以排版为主。2. workspace / sessions / memories / readme 是稳定的顶层信息架构。3. 文件树属于 workspace 内部上下文，不属于顶层导航。",
   },
-];
-
-const memoryCandidates = [
-  "Relay UI should stay low-decoration, typography-led, and visually restrained.",
-  "Top-level navigation should be workspace / sessions / memories / readme.",
 ];
 
 export default function SessionsPage() {
@@ -103,22 +85,22 @@ export default function SessionsPage() {
       <TopNav active="sessions" />
 
       <section className="sessions-shell">
-        <aside className="panel panel-left sessions-filter-panel">
-          <div className="panel-head">
-            <span className="eyebrow">library</span>
-          </div>
-
-          {groups.map((group) => (
-            <section className="section-group" key={group.title}>
-              <h2 className="section-title">#{group.title}</h2>
+        <aside className="panel panel-left sessions-rail">
+          {sessionGroups.map((group) => (
+            <section className="section-group" key={group.workspace}>
+              <div className="workspace-group-head">
+                <h2 className="section-title">{group.workspace}</h2>
+                <span className="workspace-branch">{group.branch}</span>
+              </div>
               <div className="session-list">
-                {group.items.map((item, index) => (
+                {group.items.map((session) => (
                   <article
-                    className={`session-item ${group.title === "today" && index === 0 ? "session-item-active" : ""}`}
-                    key={item}
+                    className={`session-item ${session.active ? "session-item-active" : ""}`}
+                    key={`${group.workspace}-${session.title}`}
                   >
                     <div className="session-row">
-                      <h3>{item}</h3>
+                      <h3>{session.title}</h3>
+                      <span className="session-rail-time">{session.time}</span>
                     </div>
                   </article>
                 ))}
@@ -127,100 +109,58 @@ export default function SessionsPage() {
           ))}
         </aside>
 
-        <section className="panel panel-center sessions-list-panel">
+        <section className="panel panel-center sessions-thread-panel">
           <div className="sessions-header">
-            <span className="eyebrow">sessions</span>
-            <p className="sessions-header-copy">
-              history, searchable context, and raw material for durable memory
-            </p>
+            <span className="eyebrow">{selectedSession.workspace}</span>
+            <p className="sessions-header-copy">{selectedSession.title}</p>
           </div>
 
-          <div className="session-record-list">
-            {sessions.map((session, index) => (
-              <article
-                className={`session-record ${index === 0 ? "session-record-active" : ""}`}
-                key={session.title}
-              >
-                <div className="session-record-top">
-                  <h2>{session.title}</h2>
-                  <span className={`record-status record-status-${session.status}`}>
-                    {session.status}
-                  </span>
-                </div>
-                <p>{session.summary}</p>
-                <div className="session-record-meta">
-                  <span>{session.workspace}</span>
-                  <span>{session.time}</span>
-                  <span>{session.files} files</span>
-                  <span>{session.turns} turns</span>
-                  <span>memory:{session.memory}</span>
-                </div>
+          <div className="session-thread">
+            {selectedSession.turns.map((turn, index) => (
+              <article className={`thread-item thread-item-${turn.role}`} key={`${turn.role}-${index}`}>
+                <div className="thread-role">{turn.role}</div>
+                <p>{turn.body}</p>
               </article>
             ))}
           </div>
         </section>
 
-        <aside className="panel panel-right sessions-detail-panel">
+        <aside className="panel panel-right sessions-memory-panel">
           <div className="panel-head">
-            <span className="eyebrow">memory copilot</span>
-            <div className="tab-row">
-              <button className="tab-button tab-button-active" type="button">
-                generate
-              </button>
-              <button className="tab-button" type="button">
-                template
-              </button>
+            <div className="sessions-memory-head">
+              <span className="eyebrow">memory copilot</span>
             </div>
           </div>
 
-          <section className="detail-block">
-            <h2>{selectedSession.title}</h2>
-            <p>{selectedSession.summary}</p>
-          </section>
-
-          <section className="detail-block">
-            <h3>selected context</h3>
-            <div className="detail-list">
-              <span>started: {selectedSession.startedAt}</span>
-              <span>last activity: {selectedSession.lastActivity}</span>
-              <span>branch: {selectedSession.branch}</span>
-              <span>workspace: {selectedSession.workspace}</span>
+          <section className="memory-panel">
+            <div className="memory-section-head">
+              <span>chat</span>
+              <p>通过 `@session` 引用多个会话，让 AI 整理成可持续使用的记忆。</p>
             </div>
-          </section>
 
-          <section className="detail-block memory-chat-block">
-            <h3>conversation</h3>
             <div className="memory-chat-list">
-              {memoryChat.map((item) => (
-                <article className={`memory-chat-item memory-chat-item-${item.role}`} key={item.body}>
+              {memoryChat.map((item, index) => (
+                <article
+                  className={`memory-chat-item memory-chat-item-${item.role}`}
+                  key={`${item.title}-${index}`}
+                >
                   <div className="memory-chat-role">{item.title}</div>
                   <p>{item.body}</p>
                 </article>
               ))}
             </div>
-          </section>
 
-          <section className="detail-block">
-            <h3>candidate memories</h3>
-            <div className="memory-candidate-list">
-              {memoryCandidates.map((item) => (
-                <label className="memory-candidate" key={item}>
-                  <input defaultChecked type="checkbox" />
-                  <span>{item}</span>
-                </label>
-              ))}
+            <div className="memory-composer">
+              <div className="memory-composer-input">
+                @Refine Relay workspace shell @Define V1 TDD execution plan refine these into
+                durable product memory...
+              </div>
+              <div className="memory-composer-actions">
+                <button type="button">save memory</button>
+                <button type="button">regenerate</button>
+              </div>
             </div>
           </section>
-
-          <div className="memory-composer">
-            <div className="memory-composer-input">
-              refine these into durable product memory and remove temporary implementation details...
-            </div>
-            <div className="memory-composer-actions">
-              <button type="button">save memory</button>
-              <button type="button">regenerate</button>
-            </div>
-          </div>
         </aside>
       </section>
     </main>
