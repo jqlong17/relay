@@ -1,18 +1,19 @@
+import { getMessages } from "@/config/messages";
+import { loadUiConfig } from "@/config/ui.config";
 import { TopNav } from "@/components/top-nav";
 
 export default function ReadmePage() {
+  const uiConfig = loadUiConfig();
+  const messages = getMessages(uiConfig.language);
+
   return (
     <main className="relay-app">
-      <TopNav active="readme" />
+      <TopNav active="readme" language={uiConfig.language} />
       <section className="simple-page">
         <div className="simple-page-body">
-          <span className="eyebrow">readme</span>
-          <h1>Project-facing documentation and current operating notes.</h1>
-          <p>
-            This page can become the stable place for README content, project context, onboarding,
-            and explicit instructions that should remain human-readable rather than inferred from
-            sessions.
-          </p>
+          <span className="eyebrow">{messages.readme.eyebrow}</span>
+          <h1>{messages.readme.title}</h1>
+          <p>{messages.readme.body}</p>
         </div>
       </section>
     </main>

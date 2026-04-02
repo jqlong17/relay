@@ -1,34 +1,113 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { getMessages } from "@/config/messages";
+import type { AppLanguage } from "@/config/ui.config";
 
 type TopNavProps = {
   active: "workspace" | "sessions" | "memories" | "readme";
+  language: AppLanguage;
 };
 
-const items: Array<{ key: TopNavProps["active"]; href: string; label: string }> = [
-  { key: "workspace", href: "/", label: "workspace" },
-  { key: "sessions", href: "/sessions", label: "sessions" },
-  { key: "memories", href: "/memories", label: "memories" },
-  { key: "readme", href: "/readme", label: "readme" },
-];
-
-export function TopNav({ active }: TopNavProps) {
+export function TopNav({ active, language }: TopNavProps) {
+  const router = useRouter();
+  const messages = getMessages(language);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [language, setLanguage] = useState<"zh" | "en">(() => {
-    if (typeof window === "undefined") {
-      return "zh";
+  const [appearanceContent, setAppearanceContent] = useState("");
+  const [appearanceLoaded, setAppearanceLoaded] = useState(false);
+  const [appearanceDirty, setAppearanceDirty] = useState(false);
+  const [appearanceState, setAppearanceState] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle",
+  );
+  const [isRefreshing, startRefresh] = useTransition();
+
+  useEffect(() => {
+    if (!settingsOpen || appearanceLoaded) {
+      return;
     }
 
-    const saved = window.localStorage.getItem("relay-language");
-    return saved === "en" ? "en" : "zh";
-  });
+    let cancelled = false;
 
-  function handleLanguageChange(next: "zh" | "en") {
-    setLanguage(next);
-    window.localStorage.setItem("relay-language", next);
+    async function loadAppearance() {
+      try {
+        const response = await fetch("/api/ui-config", { cache: "no-store" });
+        const data = (await response.json()) as { content?: string };
+
+        if (!cancelled && typeof data.content === "string") {
+          setAppearanceContent(data.content);
+          setAppearanceLoaded(true);
+          setAppearanceDirty(false);
+          setAppearanceState("idle");
+        }
+      } catch {
+        if (!cancelled) {
+          setAppearanceState("error");
+        }
+      }
+    }
+
+    void loadAppearance();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appearanceLoaded, settingsOpen]);
+
+  async function handleAppearanceSave() {
+    setAppearanceState("saving");
+
+    try {
+      const response = await fetch("/api/ui-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: appearanceContent }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Save failed");
+      }
+
+      setAppearanceDirty(false);
+      setAppearanceState("saved");
+      startRefresh(() => {
+        router.refresh();
+      });
+    } catch {
+      setAppearanceState("error");
+    }
+  }
+
+  async function handleAppearanceReset() {
+    setAppearanceState("resetting");
+
+    try {
+      const response = await fetch("/api/ui-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reset: true }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Reset failed");
+      }
+
+      const data = (await response.json()) as { content?: string };
+
+      if (typeof data.content === "string") {
+        setAppearanceContent(data.content);
+      }
+
+      setAppearanceDirty(false);
+      setAppearanceState("saved");
+      startRefresh(() => {
+        router.refresh();
+      });
+    } catch {
+      setAppearanceState("error");
+    }
   }
 
   return (
@@ -36,11 +115,16 @@ export function TopNav({ active }: TopNavProps) {
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">relay</span>
-          <span className="brand-state">local workspace</span>
+          <span className="brand-state">{messages.brandState}</span>
         </div>
         <div className="topbar-actions">
-          <nav className="topnav" aria-label="Primary">
-            {items.map((item) => (
+          <nav className="topnav" aria-label={messages.nav.primaryAriaLabel}>
+            {[
+              { key: "workspace", href: "/", label: messages.nav.workspace },
+              { key: "sessions", href: "/sessions", label: messages.nav.sessions },
+              { key: "memories", href: "/memories", label: messages.nav.memories },
+              { key: "readme", href: "/readme", label: messages.nav.readme },
+            ].map((item) => (
               <Link
                 className={`topnav-link ${active === item.key ? "topnav-link-active" : ""}`}
                 href={item.href}
@@ -57,7 +141,7 @@ export function TopNav({ active }: TopNavProps) {
             onClick={() => setSettingsOpen((open) => !open)}
             type="button"
           >
-            settings
+            {messages.nav.settings}
           </button>
         </div>
       </header>
@@ -65,45 +149,78 @@ export function TopNav({ active }: TopNavProps) {
       {settingsOpen ? (
         <>
           <button
-            aria-label="Close settings"
+            aria-label={messages.settings.closeAriaLabel}
             className="settings-backdrop"
             onClick={() => setSettingsOpen(false)}
             type="button"
           />
-          <aside className="settings-panel" aria-label="Settings">
+          <aside className="settings-panel" aria-label={messages.settings.panelAriaLabel}>
             <div className="settings-panel-head">
-              <span className="eyebrow">settings</span>
+              <span className="eyebrow">{messages.settings.title}</span>
               <button className="settings-close" onClick={() => setSettingsOpen(false)} type="button">
-                close
+                {messages.settings.close}
               </button>
             </div>
 
             <section className="settings-section">
               <div className="settings-section-head">
-                <h2>language</h2>
-                <span>ui preference</span>
+                <span>{messages.settings.fileName}</span>
+                <div className="settings-status">
+                  <span>
+                    {appearanceState === "saving"
+                      ? messages.settings.saving
+                      : appearanceState === "resetting"
+                        ? messages.settings.resetting
+                      : appearanceState === "saved"
+                        ? messages.settings.saved
+                        : appearanceState === "error"
+                          ? messages.settings.error
+                          : appearanceDirty
+                            ? messages.settings.modified
+                            : messages.settings.synced}
+                  </span>
+                </div>
               </div>
-              <div className="settings-language-toggle" role="tablist" aria-label="Language">
-                <button
-                  className={`settings-language-option ${
-                    language === "zh" ? "settings-language-option-active" : ""
-                  }`}
-                  onClick={() => handleLanguageChange("zh")}
-                  type="button"
-                >
-                  中文
-                </button>
-                <button
-                  className={`settings-language-option ${
-                    language === "en" ? "settings-language-option-active" : ""
-                  }`}
-                  onClick={() => handleLanguageChange("en")}
-                  type="button"
-                >
-                  English
-                </button>
+              <textarea
+                className="settings-editor"
+                onChange={(event) => {
+                  setAppearanceContent(event.target.value);
+                  setAppearanceDirty(true);
+                  setAppearanceState("idle");
+                }}
+                spellCheck={false}
+                value={appearanceContent}
+              />
+              <div className="settings-editor-actions">
+                <div className="settings-editor-actions-left">
+                  <button
+                    className="settings-save"
+                    disabled={
+                      !appearanceLoaded ||
+                      !appearanceDirty ||
+                      appearanceState === "saving" ||
+                      appearanceState === "resetting"
+                    }
+                    onClick={() => void handleAppearanceSave()}
+                    type="button"
+                  >
+                    {messages.settings.save}
+                  </button>
+                  <button
+                    className="settings-reset"
+                    disabled={
+                      !appearanceLoaded ||
+                      appearanceState === "saving" ||
+                      appearanceState === "resetting"
+                    }
+                    onClick={() => void handleAppearanceReset()}
+                    type="button"
+                  >
+                    {messages.settings.reset}
+                  </button>
+                </div>
+                <span>{isRefreshing ? messages.settings.refreshing : null}</span>
               </div>
-              <p className="settings-note">当前只保存语言偏好，后续可扩展为界面文案切换。</p>
             </section>
           </aside>
         </>

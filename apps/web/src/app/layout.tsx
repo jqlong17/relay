@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, IBM_Plex_Sans, Noto_Sans_SC } from "next/font/google";
+import { getUiCssVariables, loadUiConfig } from "@/config/ui.config";
 import "./globals.css";
 
 const plexSans = IBM_Plex_Sans({
@@ -30,12 +31,15 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const uiConfig = loadUiConfig();
+  const uiCssVariables = getUiCssVariables(uiConfig);
+
   return (
     <html
-      lang="zh-CN"
+      lang={uiConfig.language === "zh" ? "zh-CN" : "en"}
       className={`${plexSans.variable} ${plexMono.variable} ${notoSansSc.variable}`}
     >
-      <body>{children}</body>
+      <body style={uiCssVariables}>{children}</body>
     </html>
   );
 }

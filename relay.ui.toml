@@ -1,0 +1,63 @@
+# Relay UI 用户配置文件
+# 这份文件用于覆盖内置的默认 UI 配置。
+# 推荐只修改你明确知道用途的字段。未写出的字段会继续使用系统默认值。
+
+# 全局界面语言：zh / en
+language = "en"
+
+[layout]
+# 顶部导航栏高度
+topbarHeight = "40px"
+
+# workspace 页面左侧 workspace/session 列表宽度
+workspaceLeftWidth = "240px"
+
+# workspace 页面右侧 files 面板宽度
+workspaceRightWidth = "340px"
+
+# workspace 页面中，对话块的最大宽度
+# 这个值越大，越不容易换行
+workspaceMessageMaxWidth = "80%"
+
+# workspace 页面中 system/next 这类弱化消息块的最大宽度
+workspaceSystemMessageMaxWidth = "58%"
+
+# sessions 页面左侧分组列表宽度
+sessionsLeftWidth = "220px"
+
+# sessions 页面右侧 memory copilot 宽度
+sessionsRightWidth = "360px"
+
+# memories 页面左侧时间轴比例
+memoriesLeftRatio = "0.72fr"
+
+# memories 页面右侧详情比例
+memoriesRightRatio = "1.28fr"
+
+# memories 页面右侧详情最小宽度
+memoriesRightMinWidth = "420px"
+
+# 中间主内容区的横向内边距
+panelCenterXPadding = "40px"
+
+[typography]
+# 最小一档 meta 字号：时间、状态、小标签
+metaXs = "0.68rem"
+
+# 常规 meta 字号：eyebrow、次级说明、文件树等
+meta = "0.72rem"
+
+# 小号正文：对话、输入框、次级正文
+uiSm = "0.76rem"
+
+# 常规正文
+ui = "0.8rem"
+
+# 导航和较重要列表项
+nav = "0.82rem"
+
+# 小标题
+titleSm = "0.94rem"
+
+# 页面级标题
+title = "1rem"
