@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { type ClipboardEvent, useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import type { Message, MessageStatus, RuntimeEvent, Session, Workspace } from "@relay/shared-types";
 import { MobileComposer } from "@/components/mobile/mobile-composer";
@@ -18,7 +18,10 @@ import {
   openWorkspace,
   runSessionStream,
   selectSession,
+  subscribeRuntimeEvents,
+  uploadSessionImage,
 } from "@/lib/api/bridge";
+import type { BridgeRuntimeEvent, SessionAttachment } from "@/lib/api/bridge";
 
 type MobileShellProps = {
   initialActiveSession: Session | null;
@@ -45,6 +48,7 @@ export function MobileShell({
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(initialActiveWorkspace);
   const [activeSession, setActiveSession] = useState<Session | null>(initialActiveSession);
   const [composerValue, setComposerValue] = useState("");
+  const [attachments, setAttachments] = useState<SessionAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
@@ -119,6 +123,44 @@ export function MobileShell({
     }
   }, [bridgeOfflineMessage]);
 
+  const refreshActiveSessionInBackground = useCallback(async (sessionId: string) => {
+    try {
+      const detail = await getSession(sessionId, { fresh: true });
+      sessionCacheRef.current.set(sessionId, detail.item);
+      setActiveSession((current) => (current && current.id === sessionId ? detail.item : current));
+    } catch {}
+  }, []);
+
+  const handleRealtimeEvent = useCallback(
+    (event: BridgeRuntimeEvent) => {
+      const currentSessionId = activeSessionId;
+      if (!currentSessionId) {
+        return;
+      }
+
+      if (event.type === "thread.list.changed") {
+        void refreshMobileData(undefined, { silent: true });
+        return;
+      }
+
+      const eventSessionId = "sessionId" in event && typeof event.sessionId === "string" ? event.sessionId : null;
+      if (eventSessionId && eventSessionId !== currentSessionId) {
+        return;
+      }
+
+      if (
+        event.type === "run.completed" ||
+        event.type === "run.failed" ||
+        event.type === "thread.updated" ||
+        event.type === "thread.broken" ||
+        event.type === "thread.deleted_or_missing"
+      ) {
+        void refreshActiveSessionInBackground(currentSessionId);
+      }
+    },
+    [activeSessionId, refreshActiveSessionInBackground, refreshMobileData],
+  );
+
   useEffect(() => {
     if (!hasInitialSnapshot) {
       const cached = readMobileSnapshot(storageKey);
@@ -133,6 +175,14 @@ export function MobileShell({
       void refreshMobileData(undefined, { silent: true });
     }
   }, [hasInitialSnapshot, refreshMobileData]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      return;
+    }
+
+    return subscribeRuntimeEvents({ sessionId: activeSessionId }, handleRealtimeEvent, () => {});
+  }, [activeSessionId, handleRealtimeEvent]);
 
   useEffect(() => {
     writeMobileSnapshot(storageKey, {
@@ -318,14 +368,19 @@ export function MobileShell({
   }
 
   async function handleRun() {
-    if (!activeSession || !composerValue.trim()) {
+    if (!activeSession || (!composerValue.trim() && attachments.length === 0)) {
       return;
     }
 
     const prompt = composerValue.trim();
     const originalSessionId = activeSession.id;
     let materializedSessionId = originalSessionId;
-    const userMessage = createOptimisticMessage(activeSession.id, "user", prompt, activeSession.messages.length + 1);
+    const userMessage = createOptimisticMessage(
+      activeSession.id,
+      "user",
+      formatUserMessagePreview(prompt, attachments),
+      activeSession.messages.length + 1,
+    );
     const assistantMessage = createOptimisticMessage(
       activeSession.id,
       "assistant",
@@ -335,6 +390,7 @@ export function MobileShell({
     );
 
     setComposerValue("");
+    setAttachments([]);
     setIsRunActive(true);
     setActiveSession((current) => {
       if (!current || current.id !== activeSession.id) {
@@ -356,9 +412,22 @@ export function MobileShell({
     startRunTransition(() => {
       void (async () => {
         try {
-          await runSessionStream(originalSessionId, prompt, (event) => {
+          await runSessionStream(originalSessionId, prompt, attachments, (event) => {
             if (event.type === "run.started" && event.sessionId !== materializedSessionId) {
               materializedSessionId = event.sessionId;
+              setSessions((current) => replaceSessionId(current, originalSessionId, event.sessionId));
+              const cachedSession = sessionCacheRef.current.get(originalSessionId);
+              if (cachedSession) {
+                sessionCacheRef.current.delete(originalSessionId);
+                sessionCacheRef.current.set(event.sessionId, {
+                  ...cachedSession,
+                  id: event.sessionId,
+                  messages: cachedSession.messages.map((message) => ({
+                    ...message,
+                    sessionId: event.sessionId,
+                  })),
+                });
+              }
               setActiveSession((current) =>
                 current && current.id === originalSessionId
                   ? {
@@ -410,6 +479,37 @@ export function MobileShell({
       scrollToLatest();
       composerInputRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }, 140);
+  }
+
+  async function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (!activeSession) {
+      return;
+    }
+
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    setError(null);
+
+    try {
+      const uploaded = await Promise.all(imageFiles.map((file) => uploadSessionImage(activeSession.id, file)));
+      setAttachments((current) => [...current, ...uploaded.map((item) => item.item)]);
+      syncLayoutMetrics();
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : bridgeOfflineMessage);
+    }
+  }
+
+  function handleRemoveAttachment(attachmentPath: string) {
+    setAttachments((current) => current.filter((attachment) => attachment.path !== attachmentPath));
+    syncLayoutMetrics();
   }
 
   const statusLabel = error
@@ -469,11 +569,14 @@ export function MobileShell({
       />
 
       <MobileComposer
+        attachments={attachments}
         composerValue={composerValue}
         disabled={!activeSession}
         isRunning={isRunning}
         onChange={setComposerValue}
         onFocus={handleComposerFocus}
+        onPaste={handleComposerPaste}
+        onRemoveAttachment={handleRemoveAttachment}
         onRun={() => void handleRun()}
         placeholder=""
         textareaRef={composerInputRef}
@@ -603,6 +706,17 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
   return session;
 }
 
+function replaceSessionId(sessions: Session[], originalSessionId: string, nextSessionId: string) {
+  return sessions.map((session) =>
+    session.id === originalSessionId
+      ? {
+          ...session,
+          id: nextSessionId,
+        }
+      : session,
+  );
+}
+
 function markStreamingMessageErrored(session: Session | null) {
   if (!session) {
     return session;
@@ -651,4 +765,14 @@ function writeMobileSnapshot(storageKey: string, snapshot: MobileSnapshot) {
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
   } catch {}
+}
+
+function formatUserMessagePreview(text: string, attachments: SessionAttachment[]) {
+  const attachmentPreview = attachments.map((attachment) => `[Image: ${attachment.name}]`).join("\n");
+
+  if (text && attachmentPreview) {
+    return `${text}\n${attachmentPreview}`;
+  }
+
+  return text || attachmentPreview;
 }

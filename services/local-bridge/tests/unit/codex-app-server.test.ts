@@ -13,7 +13,7 @@ describe("CodexAppServerService", () => {
       request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
       startTurnStream: (
         threadId: string,
-        input: string,
+        input: Array<{ type: "text"; text: string }>,
       ) => Promise<{ turnId: string; notifications: AsyncIterable<unknown> }>;
     };
 
@@ -37,7 +37,7 @@ describe("CodexAppServerService", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    const result = await service.startTurnStream("thread-new", "hello");
+    const result = await service.startTurnStream("thread-new", [{ type: "text", text: "hello" }]);
 
     expect(result.turnId).toBe("turn-new");
     expect(service.threadResume).toHaveBeenCalledWith("thread-new");

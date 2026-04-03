@@ -22,7 +22,7 @@ type AppServerItem =
   | {
       type: "userMessage";
       id: string;
-      content: Array<{ type: "text"; text: string }>;
+      content: AppServerUserInput[];
     }
   | {
       type: "agentMessage";
@@ -32,6 +32,20 @@ type AppServerItem =
   | {
       type: string;
       id: string;
+    };
+
+type AppServerUserInput =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "image";
+      url: string;
+    }
+  | {
+      type: "localImage";
+      path: string;
     };
 
 type AppServerNotification = {
@@ -48,7 +62,7 @@ type AppServerRequestHandlers = {
   threadSetName?: (threadId: string, name: string) => Promise<void>;
   startTurnStream?: (
     threadId: string,
-    input: string,
+    input: AppServerUserInput[],
   ) => Promise<{ turnId: string; notifications: AsyncIterable<AppServerNotification> }>;
 };
 
@@ -134,7 +148,7 @@ class CodexAppServerService {
     await this.request("thread/name/set", { threadId, name });
   }
 
-  async startTurnStream(threadId: string, input: string) {
+  async startTurnStream(threadId: string, input: AppServerUserInput[]) {
     if (this.handlers.startTurnStream) {
       return this.handlers.startTurnStream(threadId, input);
     }
@@ -176,7 +190,7 @@ class CodexAppServerService {
     try {
       const result = (await this.request("turn/start", {
         threadId,
-        input: [{ type: "text", text: input }],
+        input,
       })) as { turn: AppServerTurn };
       activeTurnId = result.turn.id;
       return { turnId: activeTurnId, notifications: queue };
@@ -395,4 +409,11 @@ function getNotificationTurnId(notification: AppServerNotification) {
 }
 
 export { CodexAppServerService };
-export type { AppServerItem, AppServerNotification, AppServerThread, AppServerTurn, AppServerRequestHandlers };
+export type {
+  AppServerItem,
+  AppServerNotification,
+  AppServerRequestHandlers,
+  AppServerThread,
+  AppServerTurn,
+  AppServerUserInput,
+};

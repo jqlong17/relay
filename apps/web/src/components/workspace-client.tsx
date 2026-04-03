@@ -7,6 +7,7 @@ import {
   type Dispatch,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ClipboardEvent as ReactClipboardEvent,
   type SetStateAction,
   useCallback,
   useEffect,
@@ -16,7 +17,7 @@ import {
   useTransition,
 } from "react";
 
-import type { FileTreeNode, Message, MessageStatus, RuntimeEvent, Session, Workspace } from "@relay/shared-types";
+import type { FileTreeNode, Message, MessageStatus, RuntimeEvent, Session, TimelineMemory, Workspace } from "@relay/shared-types";
 import { getMessages } from "@/config/messages";
 import type { AppLanguage } from "@/config/ui.config";
 import {
@@ -24,7 +25,9 @@ import {
   createSession,
   getFilePreview,
   getFileTree,
+  listMemories,
   getSession,
+  getSessionMemories,
   listSessions,
   openInFinder,
   openWorkspace,
@@ -34,8 +37,10 @@ import {
   removeWorkspace,
   runSessionStream,
   selectSession,
+  subscribeRuntimeEvents,
+  uploadSessionImage,
 } from "@/lib/api/bridge";
-import type { FilePreview } from "@/lib/api/bridge";
+import type { BridgeRuntimeEvent, FilePreview, SessionAttachment } from "@/lib/api/bridge";
 import { renderMarkdown } from "@/lib/markdown";
 
 type WorkspaceClientProps = {
@@ -83,6 +88,22 @@ type WorkspaceLayoutWidths = {
   sidepanelPrimary: number | null;
 };
 
+type MentionCandidate = {
+  id: string;
+  kind: "session" | "memory";
+  label: string;
+  detail: string;
+  sessionId: string;
+  searchText: string;
+  content?: string;
+};
+
+type MentionQueryState = {
+  query: string;
+  start: number;
+  end: number;
+};
+
 type CssVariableStyle = CSSProperties & Record<string, string>;
 
 const WORKSPACE_LAYOUT_STORAGE_KEY = "relay.workspace.layout.v1";
@@ -104,12 +125,16 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const [fileTree, setFileTree] = useState<FileTreeNode | null>(null);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const [composerValue, setComposerValue] = useState("");
+  const [attachments, setAttachments] = useState<SessionAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSessionsLoading, setIsSessionsLoading] = useState(true);
   const [isActiveSessionLoading, setIsActiveSessionLoading] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isMemoriesLoading, setIsMemoriesLoading] = useState(false);
   const [preview, setPreview] = useState<FilePreview | null>(null);
+  const [sessionMemories, setSessionMemories] = useState<TimelineMemory[]>([]);
+  const [allMemories, setAllMemories] = useState<TimelineMemory[]>([]);
   const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(false);
   const [sidePanelMode, setSidePanelMode] = useState<WorkspaceSidePanelMode>("summary");
   const [archiveCandidate, setArchiveCandidate] = useState<Session | null>(null);
@@ -120,12 +145,16 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const [isArchiving, setIsArchiving] = useState(false);
   const [isRunning, startRunTransition] = useTransition();
   const [isSwitchingSession, startSessionSwitchTransition] = useTransition();
+  const [selectedMentions, setSelectedMentions] = useState<MentionCandidate[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<MentionQueryState | null>(null);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [layoutWidths, setLayoutWidths] = useState<WorkspaceLayoutWidths>({
     left: null,
     right: null,
     sidepanelPrimary: null,
   });
   const currentMessageRef = useRef<HTMLElement | null>(null);
+  const composerInputRef = useRef<HTMLInputElement | null>(null);
   const shellRef = useRef<HTMLElement | null>(null);
   const leftPanelRef = useRef<HTMLElement | null>(null);
   const rightPanelRef = useRef<HTMLElement | null>(null);
@@ -176,10 +205,18 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     () => createWorkspaceActionPrompts(activeSession, linkedFiles, language),
     [activeSession, language, linkedFiles],
   );
-  const timelineSummaryItems = useMemo(
-    () => createTimelineSummaryItems(activeSession),
-    [activeSession],
+  const groupedSessionMemories = useMemo(() => groupMemoriesByDate(sessionMemories), [sessionMemories]);
+  const mentionCandidates = useMemo(
+    () => buildMentionCandidates(sessions, allMemories, activeSessionId),
+    [sessions, allMemories, activeSessionId],
   );
+  const filteredMentionCandidates = useMemo(() => {
+    if (!mentionQuery) {
+      return [];
+    }
+
+    return filterMentionCandidates(mentionCandidates, mentionQuery.query, selectedMentions).slice(0, 8);
+  }, [mentionCandidates, mentionQuery, selectedMentions]);
   const workspaceShellStyle = useMemo(() => {
     const style: CssVariableStyle = {};
 
@@ -243,6 +280,20 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     return request;
   }, []);
 
+  const loadSessionMemories = useCallback(async (sessionId: string) => {
+    setIsMemoriesLoading(true);
+
+    try {
+      const memoryResponse = await getSessionMemories(sessionId);
+      setSessionMemories(memoryResponse.items);
+    } catch (memoryError) {
+      setError(memoryError instanceof Error ? memoryError.message : bridgeOfflineMessage);
+      setSessionMemories([]);
+    } finally {
+      setIsMemoriesLoading(false);
+    }
+  }, [bridgeOfflineMessage]);
+
   const refreshSessionDetailInBackground = useCallback(async (sessionId: string) => {
     try {
       const sessionDetail = await getSession(sessionId, { fresh: true });
@@ -272,6 +323,36 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       }
     } catch {}
   }, []);
+
+  const handleRealtimeEvent = useCallback(
+    (event: BridgeRuntimeEvent) => {
+      const currentSessionId = activeSessionIdRef.current;
+      if (!currentSessionId) {
+        return;
+      }
+
+      if (event.type === "thread.list.changed") {
+        void refreshSessionListInBackground(currentSessionId);
+        return;
+      }
+
+      const eventSessionId = "sessionId" in event && typeof event.sessionId === "string" ? event.sessionId : null;
+      if (eventSessionId && eventSessionId !== currentSessionId) {
+        return;
+      }
+
+      if (
+        event.type === "run.completed" ||
+        event.type === "run.failed" ||
+        event.type === "thread.updated" ||
+        event.type === "thread.broken" ||
+        event.type === "thread.deleted_or_missing"
+      ) {
+        void refreshSessionDetailInBackground(currentSessionId);
+      }
+    },
+    [refreshSessionDetailInBackground, refreshSessionListInBackground],
+  );
 
   const refreshWorkspaceData = useCallback(async (nextSessionId?: string) => {
     setIsLoading(true);
@@ -310,6 +391,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         setIsActiveSessionLoading(true);
         const sessionDetail = await loadSessionDetail(targetSessionId);
         setActiveSession(sessionDetail.item);
+        await loadSessionMemories(targetSessionId);
         setIsActiveSessionLoading(false);
 
         if (sessionDetail.source === "snapshot") {
@@ -323,6 +405,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         void Promise.allSettled(preloadSessionIds.map((sessionId) => loadSessionDetail(sessionId)));
       } else {
         setActiveSession(null);
+        setSessionMemories([]);
         setIsActiveSessionLoading(false);
       }
 
@@ -335,6 +418,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       setSessions([]);
       setActiveSessionId(null);
       setActiveSession(null);
+      setSessionMemories([]);
       setFileTree(null);
       setIsSessionsLoading(false);
       setIsActiveSessionLoading(false);
@@ -346,6 +430,14 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   useEffect(() => {
     void refreshWorkspaceData();
   }, [refreshWorkspaceData, language]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      return;
+    }
+
+    return subscribeRuntimeEvents({ sessionId: activeSessionId }, handleRealtimeEvent, () => {});
+  }, [activeSessionId, handleRealtimeEvent]);
 
   useEffect(() => {
     if (!sessionContextMenu) {
@@ -471,6 +563,36 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (isActiveSessionLoading || isSwitchingSession || !activeSession) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      currentMessageRef.current?.scrollIntoView({
+        behavior: "auto",
+        block: "end",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeSession?.id, activeSession?.messages.length, isActiveSessionLoading, isSwitchingSession]);
+
+  useEffect(() => {
+    if (!mentionQuery) {
+      setActiveMentionIndex(0);
+      return;
+    }
+
+    setActiveMentionIndex((current) => {
+      if (filteredMentionCandidates.length === 0) {
+        return 0;
+      }
+
+      return Math.min(current, filteredMentionCandidates.length - 1);
+    });
+  }, [filteredMentionCandidates.length, mentionQuery]);
+
   async function handleOpenWorkspace() {
     try {
       setError(null);
@@ -489,7 +611,9 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     try {
       setError(null);
       setPreview(null);
-      await openWorkspace(workspace.localPath);
+      if (!workspace.isActive) {
+        await openWorkspace(workspace.localPath);
+      }
       const created = await createSession(`Session ${new Date().toLocaleTimeString()}`);
       await refreshWorkspaceData(created.item.id);
     } catch (createError) {
@@ -520,6 +644,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         startSessionSwitchTransition(() => {
           setActiveSession(cachedSession);
         });
+        await loadSessionMemories(sessionId);
         setIsActiveSessionLoading(false);
         scrollTimelineToLatest();
         return;
@@ -530,6 +655,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         startSessionSwitchTransition(() => {
           setActiveSession(sessionDetail.item);
         });
+        await loadSessionMemories(sessionId);
         setIsActiveSessionLoading(false);
         scrollTimelineToLatest();
       }
@@ -541,7 +667,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       setError(sessionError instanceof Error ? sessionError.message : bridgeOfflineMessage);
       setIsActiveSessionLoading(false);
     }
-  }, [bridgeOfflineMessage, loadSessionDetail, refreshSessionDetailInBackground, startSessionSwitchTransition]);
+  }, [bridgeOfflineMessage, loadSessionDetail, loadSessionMemories, refreshSessionDetailInBackground, startSessionSwitchTransition]);
 
   const handlePrefetchSession = useCallback((sessionId: string) => {
     if (sessionCacheRef.current.has(sessionId) || pendingSessionRequestsRef.current.has(sessionId)) {
@@ -647,18 +773,21 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
       if (!nextActiveSessionId) {
         setActiveSession(null);
+        setSessionMemories([]);
         return;
       }
 
       const cachedSession = sessionCacheRef.current.get(nextActiveSessionId);
       if (cachedSession) {
         setActiveSession(cachedSession);
+        await loadSessionMemories(nextActiveSessionId);
         return;
       }
 
       const sessionDetail = await getSession(nextActiveSessionId);
       cacheSessionDetail(sessionCacheRef.current, sessionDetail.item);
       setActiveSession(sessionDetail.item);
+      await loadSessionMemories(nextActiveSessionId);
     } catch (archiveError) {
       setError(archiveError instanceof Error ? archiveError.message : bridgeOfflineMessage);
     } finally {
@@ -744,21 +873,38 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   }
 
   async function handleRun() {
-    if (!activeSession || !composerValue.trim()) {
+    if (!activeSession || (!composerValue.trim() && attachments.length === 0)) {
       return;
     }
 
     const prompt = composerValue.trim();
+    const displayPrompt = createDisplayPrompt(prompt, selectedMentions, language);
+    const materializedPrompt = await buildPromptWithMentions(
+      prompt,
+      selectedMentions,
+      language,
+      activeSession,
+      loadSessionDetail,
+    );
     const originalSessionId = activeSession.id;
     let materializedSessionId = originalSessionId;
+    const pendingAttachments = attachments;
     setComposerValue("");
+    setAttachments([]);
+    setSelectedMentions([]);
+    setMentionQuery(null);
     shouldFollowCurrentRunRef.current = true;
 
     startRunTransition(() => {
       void (async () => {
         try {
           setError(null);
-          const userMessage = createOptimisticMessage(activeSession.id, "user", prompt, activeSession.messages.length + 1);
+          const userMessage = createOptimisticMessage(
+            activeSession.id,
+            "user",
+            formatUserMessagePreview(displayPrompt, pendingAttachments),
+            activeSession.messages.length + 1,
+          );
           const assistantMessage = createOptimisticMessage(
             activeSession.id,
             "assistant",
@@ -783,11 +929,24 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
             scrollToCurrentMessage("smooth");
           });
 
-          await runSessionStream(originalSessionId, prompt, (event) => {
+          await runSessionStream(originalSessionId, materializedPrompt, pendingAttachments, (event) => {
             if (event.type === "run.started" && event.sessionId !== materializedSessionId) {
               materializedSessionId = event.sessionId;
               setActiveSessionId(event.sessionId);
               activeSessionIdRef.current = event.sessionId;
+              setSessions((current) => replaceSessionId(current, originalSessionId, event.sessionId));
+              const cachedSession = sessionCacheRef.current.get(originalSessionId);
+              if (cachedSession) {
+                sessionCacheRef.current.delete(originalSessionId);
+                sessionCacheRef.current.set(event.sessionId, {
+                  ...cachedSession,
+                  id: event.sessionId,
+                  messages: cachedSession.messages.map((message) => ({
+                    ...message,
+                    sessionId: event.sessionId,
+                  })),
+                });
+              }
               setActiveSession((current) =>
                 current && current.id === originalSessionId
                   ? {
@@ -840,6 +999,35 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     });
   }
 
+  async function handleComposerPaste(event: ReactClipboardEvent<HTMLInputElement>) {
+    if (!activeSession) {
+      return;
+    }
+
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    setError(null);
+
+    try {
+      const uploaded = await Promise.all(imageFiles.map((file) => uploadSessionImage(activeSession.id, file)));
+      setAttachments((current) => [...current, ...uploaded.map((item) => item.item)]);
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : bridgeOfflineMessage);
+    }
+  }
+
+  function handleRemoveAttachment(attachmentPath: string) {
+    setAttachments((current) => current.filter((attachment) => attachment.path !== attachmentPath));
+  }
+
   function scrollTimelineToLatest() {
     requestAnimationFrame(() => {
       currentMessageRef.current?.scrollIntoView({
@@ -847,6 +1035,55 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         block: "end",
       });
     });
+  }
+
+  async function ensureMemoryCatalogLoaded() {
+    if (allMemories.length > 0) {
+      return;
+    }
+
+    try {
+      const response = await listMemories();
+      setAllMemories(response.items);
+    } catch {}
+  }
+
+  function handleComposerChange(nextValue: string, cursor: number | null) {
+    setComposerValue(nextValue);
+
+    const nextMentionQuery = cursor === null ? null : findActiveMentionQuery(nextValue, cursor);
+    setMentionQuery(nextMentionQuery);
+
+    if (nextMentionQuery) {
+      void ensureMemoryCatalogLoaded();
+    }
+  }
+
+  function handleSelectMention(candidate: MentionCandidate) {
+    setSelectedMentions((current) => {
+      if (current.some((item) => item.kind === candidate.kind && item.id === candidate.id)) {
+        return current;
+      }
+
+      return [...current, candidate];
+    });
+
+    setComposerValue((current) => {
+      if (!mentionQuery) {
+        return current;
+      }
+
+      return `${current.slice(0, mentionQuery.start)}${current.slice(mentionQuery.end)}`.replace(/\s{2,}/g, " ");
+    });
+    setMentionQuery(null);
+    setActiveMentionIndex(0);
+    requestAnimationFrame(() => {
+      composerInputRef.current?.focus();
+    });
+  }
+
+  function handleRemoveMention(candidate: MentionCandidate) {
+    setSelectedMentions((current) => current.filter((item) => !(item.kind === candidate.kind && item.id === candidate.id)));
   }
 
   function handleResizeStart(handle: WorkspaceResizeHandle, event: ReactPointerEvent<HTMLButtonElement>) {
@@ -980,18 +1217,107 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
         <div className="composer">
           <div className="composer-prompt">relay &gt;</div>
-          <input
-            className="composer-input composer-input-field"
-            onChange={(event) => setComposerValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-                void handleRun();
-              }
-            }}
-            placeholder={messages.workspace.composer}
-            value={composerValue}
-          />
-          <button className="composer-send" disabled={!activeSession || isRunning} onClick={() => void handleRun()} type="button">
+          <div className="composer-input-shell">
+            {selectedMentions.length > 0 ? (
+              <div className="composer-mentions" role="list" aria-label="selected context">
+                {selectedMentions.map((mention) => (
+                  <button
+                    aria-label={`remove ${mention.label}`}
+                    className="composer-mention-chip"
+                    key={`${mention.kind}:${mention.id}`}
+                    onClick={() => handleRemoveMention(mention)}
+                    type="button"
+                  >
+                    <span className="composer-mention-chip-kind">{mention.kind === "memory" ? "memory" : "session"}</span>
+                    <span>{mention.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {attachments.length > 0 ? (
+              <div className="composer-attachments" role="list" aria-label="pasted images">
+                {attachments.map((attachment) => (
+                  <button
+                    className="composer-attachment-chip"
+                    key={attachment.path}
+                    onClick={() => handleRemoveAttachment(attachment.path)}
+                    type="button"
+                  >
+                    {attachment.name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <input
+              className="composer-input composer-input-field"
+              onChange={(event) => handleComposerChange(event.target.value, event.target.selectionStart)}
+              onKeyDown={(event) => {
+                if (mentionQuery && filteredMentionCandidates.length > 0) {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setActiveMentionIndex((current) => (current + 1) % filteredMentionCandidates.length);
+                    return;
+                  }
+
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setActiveMentionIndex((current) => (current - 1 + filteredMentionCandidates.length) % filteredMentionCandidates.length);
+                    return;
+                  }
+
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                    event.preventDefault();
+                    handleSelectMention(filteredMentionCandidates[activeMentionIndex] ?? filteredMentionCandidates[0]);
+                    return;
+                  }
+
+                  if (event.key === "Escape") {
+                    setMentionQuery(null);
+                    return;
+                  }
+                }
+
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                  void handleRun();
+                }
+              }}
+              onPaste={handleComposerPaste}
+              placeholder={messages.workspace.composer}
+              ref={composerInputRef}
+              value={composerValue}
+            />
+            {mentionQuery ? (
+              <div className="composer-mention-menu" role="listbox" aria-label="context suggestions">
+                {filteredMentionCandidates.length > 0 ? (
+                  filteredMentionCandidates.map((candidate, index) => (
+                    <button
+                      aria-selected={index === activeMentionIndex}
+                      className={`composer-mention-option ${index === activeMentionIndex ? "composer-mention-option-active" : ""}`}
+                      key={`${candidate.kind}:${candidate.id}`}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        handleSelectMention(candidate);
+                      }}
+                      role="option"
+                      type="button"
+                    >
+                      <span className="composer-mention-option-kind">{candidate.kind === "memory" ? "memory" : "session"}</span>
+                      <span className="composer-mention-option-main">{candidate.label}</span>
+                      <span className="composer-mention-option-detail">{candidate.detail}</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="composer-mention-empty">no matching context</div>
+                )}
+              </div>
+            ) : null}
+          </div>
+          <button
+            className="composer-send"
+            disabled={!activeSession || isRunning || (!composerValue.trim() && attachments.length === 0)}
+            onClick={() => void handleRun()}
+            type="button"
+          >
             {isRunning ? messages.workspace.loading : messages.common.run}
           </button>
         </div>
@@ -1161,49 +1487,42 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
               <section className="workspace-sidepanel-section">
                 <div className="workspace-sidepanel-subhead">
-                  <span className="eyebrow">{messages.workspace.linkedFiles}</span>
-                  <span className="workspace-sidepanel-subhead-detail">{linkedFiles.length}</span>
+                  <span className="eyebrow">{messages.sessions.memoryCopilot}</span>
+                  <span className="workspace-sidepanel-subhead-detail">
+                    {activeSession?.title ?? messages.workspace.noSession}
+                  </span>
                 </div>
-                {linkedFiles.length > 0 ? (
-                  <div className="workspace-summary-list">
-                    {linkedFiles.map((filePath) => (
-                      <button
-                        className="workspace-summary-link"
-                        key={filePath}
-                        onClick={() => void handleOpenLinkedFile(filePath)}
-                        type="button"
-                      >
-                        {filePath}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
+                {isMemoriesLoading ? (
                   <div className="workspace-sidepanel-empty">
-                    <p>{messages.workspace.noLinkedFiles}</p>
+                    <p>{messages.workspace.loading}</p>
                   </div>
-                )}
-              </section>
-
-              <section className="workspace-sidepanel-section">
-                <div className="workspace-sidepanel-subhead">
-                  <span className="eyebrow">{messages.workspace.timelineLabel}</span>
-                  <span className="workspace-sidepanel-subhead-detail">{timelineSummaryItems.length}</span>
-                </div>
-                {timelineSummaryItems.length > 0 ? (
+                ) : groupedSessionMemories.length > 0 ? (
                   <div className="workspace-summary-timeline">
-                    {timelineSummaryItems.map((item) => (
-                      <article className="workspace-summary-timeline-item" key={item.id}>
-                        <div className="workspace-summary-timeline-top">
-                          <span>{getMessageRoleLabel(item.role, messages)}</span>
-                          <span>{item.time}</span>
+                    {groupedSessionMemories.map((group) => (
+                      <section className="workspace-summary-memory-group" key={group.date}>
+                        <div className="workspace-sidepanel-subhead">
+                          <span className="eyebrow">{group.date}</span>
+                          <span className="workspace-sidepanel-subhead-detail">{group.items.length}</span>
                         </div>
-                        <p>{item.content}</p>
-                      </article>
+                        {group.items.map((memory) => (
+                          <article className="workspace-summary-timeline-item" key={memory.id}>
+                            <div className="workspace-summary-timeline-top">
+                              <span>{memory.themeTitle}</span>
+                              <span>{`${memory.checkpointTurnCount} ${messages.workspace.turnsSuffix}`}</span>
+                            </div>
+                            <strong>{memory.title}</strong>
+                            <div
+                              className="workspace-log-content"
+                              dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.content) }}
+                            />
+                          </article>
+                        ))}
+                      </section>
                     ))}
                   </div>
                 ) : (
                   <div className="workspace-sidepanel-empty">
-                    <p>{messages.workspace.noTimeline}</p>
+                    <p>no timeline memories yet for this session</p>
                   </div>
                 )}
               </section>
@@ -1224,7 +1543,6 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
                       key={item.title}
                       onClick={() => {
                         setComposerValue(item.prompt);
-                        setSidePanelMode("summary");
                       }}
                       type="button"
                     >
@@ -1360,6 +1678,16 @@ function createOptimisticMessage(
   };
 }
 
+function formatUserMessagePreview(text: string, attachments: SessionAttachment[]) {
+  const attachmentPreview = attachments.map((attachment) => `[Image: ${attachment.name}]`).join("\n");
+
+  if (text && attachmentPreview) {
+    return `${text}\n${attachmentPreview}`;
+  }
+
+  return text || attachmentPreview;
+}
+
 function createClientMessageId(role: Message["role"]) {
   return `client-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -1460,6 +1788,17 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
   }
 
   return session;
+}
+
+function replaceSessionId(sessions: Session[], originalSessionId: string, nextSessionId: string) {
+  return sessions.map((session) =>
+    session.id === originalSessionId
+      ? {
+          ...session,
+          id: nextSessionId,
+        }
+      : session,
+  );
 }
 
 function markStreamingMessageErrored(session: Session | null) {
@@ -1705,6 +2044,23 @@ function summarizeMessageContent(content: string, maxLength = 120) {
   return `${compact.slice(0, maxLength).trimEnd()}...`;
 }
 
+function groupMemoriesByDate(memories: TimelineMemory[]) {
+  const groups = new Map<string, TimelineMemory[]>();
+
+  for (const memory of memories) {
+    const current = groups.get(memory.memoryDate) ?? [];
+    current.push(memory);
+    groups.set(memory.memoryDate, current);
+  }
+
+  return [...groups.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, items]) => ({
+      date,
+      items: items.sort((a, b) => b.checkpointTurnCount - a.checkpointTurnCount),
+    }));
+}
+
 function createWorkspaceActionPrompts(session: Session | null, linkedFiles: string[], language: AppLanguage) {
   const isZh = language === "zh";
   const referencedFiles = linkedFiles.length > 0
@@ -1720,33 +2076,147 @@ function createWorkspaceActionPrompts(session: Session | null, linkedFiles: stri
 
   return [
     {
-      title: isZh ? "时间线摘要" : "timeline summary",
+      title: isZh ? "时间线记忆" : "timeline memory",
       description: isZh
-        ? "按时间线梳理对话摘要，保留必要细节和具体文件。"
-        : "Summarize the conversation as a timeline with concrete details and files.",
+        ? "按时间线梳理摘要，合并用户决策与关注点地图，形成一条完整记忆。"
+        : "Create a single timeline memory with summary, user decisions, and focus map.",
       prompt: isZh
-        ? `请按照时间线梳理这个 session 的对话摘要，保留必要细节，涉及具体文件时要写清楚。${sessionTitle}${referencedFiles}`.trim()
-        : `Please summarize this session as a timeline, keeping the necessary details and naming specific files when relevant. ${sessionTitle}${referencedFiles}`.trim(),
-    },
-    {
-      title: isZh ? "用户决策" : "user decisions",
-      description: isZh
-        ? "提取用户明确做出的决策和理由；若理由没明说就不要补。"
-        : "Extract explicit user decisions and reasons without inventing missing rationale.",
-      prompt: isZh
-        ? `请提取这个 session 中用户明确做出的决策和理由。只有用户自己明确说出的理由才能保留；如果没说，就不要补。${sessionTitle}`.trim()
-        : `Please extract the explicit decisions the user made in this session and the reasons they stated. Keep only reasons the user clearly said; if none were stated, do not invent them. ${sessionTitle}`.trim(),
-    },
-    {
-      title: isZh ? "关注点地图" : "focus map",
-      description: isZh
-        ? "识别用户在过程中真正关注什么、不关注什么。"
-        : "Identify what the user truly cared about and what they did not.",
-      prompt: isZh
-        ? `请总结这个 session 里用户真正关注什么、不关注什么，并用简洁列表说明。${sessionTitle}`.trim()
-        : `Please summarize what the user truly cared about in this session, and what they did not care about, using a concise list. ${sessionTitle}`.trim(),
+        ? `请整理这个 session 的时间线记忆：按时间线梳理对话摘要，保留必要细节和具体文件；提取用户明确做出的决策和理由，若理由未明说就不要补；识别用户真正关注什么、不关注什么。${sessionTitle}${referencedFiles}`.trim()
+        : `Please create a timeline memory for this session: summarize the conversation as a timeline with concrete file details, extract only explicit user decisions and stated reasons, and identify what the user truly cared about or did not care about. ${sessionTitle}${referencedFiles}`.trim(),
     },
   ];
+}
+
+function findActiveMentionQuery(value: string, cursor: number) {
+  const prefix = value.slice(0, cursor);
+  const match = prefix.match(/(?:^|\s)@([^\s@]*)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const token = match[0];
+  const start = prefix.length - token.length + token.lastIndexOf("@");
+
+  return {
+    query: match[1] ?? "",
+    start,
+    end: cursor,
+  };
+}
+
+function buildMentionCandidates(sessions: Session[], memories: TimelineMemory[], activeSessionId: string | null): MentionCandidate[] {
+  const sessionCandidates = sessions
+    .filter((session) => session.id !== activeSessionId)
+    .map((session) => ({
+      id: session.id,
+      kind: "session" as const,
+      label: session.title,
+      detail: `session · ${formatMentionSessionDetail(session)}`,
+      sessionId: session.id,
+      searchText: `${session.title} ${session.updatedAt}`.toLowerCase(),
+    }));
+
+  const memoryCandidates = memories.map((memory) => ({
+    id: memory.id,
+    kind: "memory" as const,
+    label: memory.title,
+    detail: `${memory.themeTitle} · ${memory.memoryDate}`,
+    sessionId: memory.sessionId,
+    searchText: `${memory.title} ${memory.themeTitle} ${memory.memoryDate} ${memory.sessionTitleSnapshot}`.toLowerCase(),
+    content: memory.content,
+  }));
+
+  return [...memoryCandidates, ...sessionCandidates];
+}
+
+function filterMentionCandidates(
+  candidates: MentionCandidate[],
+  query: string,
+  selectedMentions: MentionCandidate[],
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const selectedKeys = new Set(selectedMentions.map((item) => `${item.kind}:${item.id}`));
+
+  return candidates.filter((candidate) => {
+    if (selectedKeys.has(`${candidate.kind}:${candidate.id}`)) {
+      return false;
+    }
+
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    return candidate.searchText.includes(normalizedQuery);
+  });
+}
+
+function createDisplayPrompt(prompt: string, mentions: MentionCandidate[], language: AppLanguage) {
+  if (mentions.length === 0) {
+    return prompt;
+  }
+
+  const isZh = language === "zh";
+  const labels = mentions.map((mention) => `@${mention.label}`).join(" ");
+  return isZh ? `引用上下文：${labels}\n\n${prompt}` : `Referenced context: ${labels}\n\n${prompt}`;
+}
+
+async function buildPromptWithMentions(
+  prompt: string,
+  mentions: MentionCandidate[],
+  language: AppLanguage,
+  activeSession: Session,
+  loadSessionDetail: (sessionId: string) => Promise<LoadedSessionDetail>,
+) {
+  if (mentions.length === 0) {
+    return prompt;
+  }
+
+  const isZh = language === "zh";
+  const blocks = await Promise.all(
+    mentions.map(async (mention, index) => {
+      if (mention.kind === "memory") {
+        return null;
+      }
+
+      const session =
+        mention.sessionId === activeSession.id
+          ? activeSession
+          : (await loadSessionDetail(mention.sessionId)).item;
+      const header = isZh ? `引用会话 ${index + 1}` : `Referenced Session ${index + 1}`;
+      return `${header}\n${serializeSessionReference(session, language)}`;
+    }),
+  );
+
+  const memoryBlocks = mentions
+    .filter((mention) => mention.kind === "memory")
+    .map((mention, index) => {
+      const header = isZh ? `引用记忆内容 ${index + 1}` : `Referenced Memory Content ${index + 1}`;
+      return `${header}\n${mention.label}\n${mention.detail}\n${mention.content ?? ""}`.trimEnd();
+    });
+
+  const contextHeader = isZh
+    ? "以下是用户显式引用的上下文，请将其作为辅助背景，不要覆盖当前用户指令。"
+    : "The following context was explicitly referenced by the user. Use it as supporting context and do not override the current user request.";
+  const requestHeader = isZh ? "当前用户请求" : "Current user request";
+
+  return [contextHeader, ...blocks.filter((item): item is string => Boolean(item)), ...memoryBlocks, `${requestHeader}\n${prompt}`].join("\n\n");
+}
+
+function serializeSessionReference(session: Session, language: AppLanguage) {
+  const isZh = language === "zh";
+  const titleLine = isZh ? `标题：${session.title}` : `Title: ${session.title}`;
+  const turnLine = isZh ? `轮数：${session.turnCount}` : `Turns: ${session.turnCount}`;
+  const header = isZh ? "最近消息：" : "Recent messages:";
+  const messages = session.messages
+    .slice(-12)
+    .map((message, index) => `${index + 1}. ${message.role}: ${summarizeMessageContent(message.content, 280)}`);
+
+  return [titleLine, turnLine, header, ...messages].join("\n");
+}
+
+function formatMentionSessionDetail(session: Session) {
+  return `${session.turnCount} turns`;
 }
 
 function getSidePanelModeLabel(mode: WorkspaceSidePanelMode, messages: ReturnType<typeof getMessages>) {

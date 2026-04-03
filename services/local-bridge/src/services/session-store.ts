@@ -25,7 +25,7 @@ class SessionStore {
     const all = [...this.sessions.values()];
     return all
       .filter((session) => !workspaceId || session.workspaceId === workspaceId)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      .sort(compareSessionsByCreatedAtDesc);
   }
 
   get(sessionId: string): Session | undefined {
@@ -90,6 +90,10 @@ class SessionStore {
     session.turnCount = messages.filter((message) => message.role === "user").length;
     session.updatedAt = new Date().toISOString();
   }
+}
+
+function compareSessionsByCreatedAtDesc(a: Session, b: Session) {
+  return b.createdAt.localeCompare(a.createdAt);
 }
 
 export { SessionStore };

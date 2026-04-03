@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SessionStore } from "../../src/services/session-store";
 
 describe("SessionStore", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("creates a session", () => {
     const store = new SessionStore();
 
@@ -33,6 +37,24 @@ describe("SessionStore", () => {
 
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.workspaceId).toBe("workspace-1");
+  });
+
+  it("keeps workspace session order by creation time even after updates", () => {
+    vi.useFakeTimers();
+    const store = new SessionStore();
+
+    vi.setSystemTime(new Date("2026-04-03T00:00:00.000Z"));
+    const firstSession = store.create("workspace-1", "Task A");
+
+    vi.setSystemTime(new Date("2026-04-03T00:10:00.000Z"));
+    const secondSession = store.create("workspace-1", "Task B");
+
+    vi.setSystemTime(new Date("2026-04-03T00:20:00.000Z"));
+    store.appendMessage(firstSession.id, "user", "Bump updated time");
+
+    const sessions = store.list("workspace-1");
+
+    expect(sessions.map((session) => session.id)).toEqual([secondSession.id, firstSession.id]);
   });
 
   it("renames and removes a session", () => {

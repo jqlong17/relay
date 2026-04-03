@@ -1,4 +1,4 @@
-import type { FileTreeNode, RuntimeEvent, Session, Workspace } from "@relay/shared-types";
+import type { FileTreeNode, RuntimeEvent, Session, TimelineMemory, Workspace } from "@relay/shared-types";
 
 import { consumeRuntimeEventStream } from "@/lib/stream/runtime-stream";
 
@@ -19,6 +19,30 @@ type SessionListResponse = {
 type SessionDetailResponse = {
   item: Session;
   source?: "fresh" | "snapshot";
+};
+
+type SessionMemoriesResponse = {
+  items: TimelineMemory[];
+};
+
+type BridgeRuntimeEvent =
+  | RuntimeEvent
+  | {
+      type: "thread.updated" | "thread.list.changed" | "thread.broken" | "thread.deleted_or_missing";
+      sessionId?: string;
+      workspaceId?: string;
+      createdAt: string;
+    };
+
+type RuntimeEventSubscriptionOptions = {
+  sessionId?: string;
+  workspaceId?: string;
+};
+
+type SessionAttachment = {
+  path: string;
+  name: string;
+  mimeType: string;
 };
 
 async function listWorkspaces() {
@@ -64,6 +88,29 @@ async function getSession(sessionId: string, options?: { fresh?: boolean }) {
   return fetchJson<SessionDetailResponse>(`/api/bridge/sessions/${sessionId}${search}`);
 }
 
+async function getSessionMemories(sessionId: string) {
+  return fetchJson<SessionMemoriesResponse>(`/api/bridge/sessions/${sessionId}/memories`);
+}
+
+async function generateSessionMemory(sessionId: string, options?: { force?: boolean }) {
+  const search = options?.force ? "?force=1" : "";
+  return fetchJson<{ ok: boolean; item: TimelineMemory | null }>(`/api/bridge/sessions/${sessionId}/memories${search}`, {
+    method: "POST",
+  });
+}
+
+async function listMemories() {
+  return fetchJson<SessionMemoriesResponse>("/api/bridge/memories");
+}
+
+async function listMemoriesByTheme(themeKey: string) {
+  return fetchJson<SessionMemoriesResponse>(`/api/bridge/memories?themeKey=${encodeURIComponent(themeKey)}`);
+}
+
+async function listMemoriesByDate(date: string) {
+  return fetchJson<SessionMemoriesResponse>(`/api/bridge/memories?date=${encodeURIComponent(date)}`);
+}
+
 async function archiveSession(sessionId: string) {
   return fetchJson<{ ok: boolean; archivedSessionId: string }>(`/api/bridge/sessions/${sessionId}?action=archive`, {
     method: "POST",
@@ -83,16 +130,17 @@ async function selectSession(sessionId: string) {
   });
 }
 
-async function runSession(sessionId: string, content: string) {
+async function runSession(sessionId: string, content: string, attachments: SessionAttachment[] = []) {
   return fetchJson<{ sessionId: string; events: RuntimeEvent[] }>("/api/bridge/runtime/run", {
     method: "POST",
-    body: JSON.stringify({ sessionId, content }),
+    body: JSON.stringify({ sessionId, content, attachments }),
   });
 }
 
 async function runSessionStream(
   sessionId: string,
   content: string,
+  attachments: SessionAttachment[],
   onEvent: (event: RuntimeEvent) => void,
 ) {
   const response = await fetch("/api/bridge/runtime/run?stream=1", {
@@ -100,10 +148,70 @@ async function runSessionStream(
     headers: {
       "content-type": "application/json",
     },
-    body: JSON.stringify({ sessionId, content }),
+    body: JSON.stringify({ sessionId, content, attachments }),
   });
 
   await consumeRuntimeEventStream(response, onEvent);
+}
+
+async function uploadSessionImage(sessionId: string, file: File) {
+  const data = await fileToBase64(file);
+
+  return fetchJson<{ item: SessionAttachment }>("/api/bridge/runtime/attachments", {
+    method: "POST",
+    body: JSON.stringify({
+      sessionId,
+      filename: file.name,
+      mimeType: file.type,
+      data,
+    }),
+  });
+}
+
+function subscribeRuntimeEvents(
+  options: RuntimeEventSubscriptionOptions,
+  onEvent: (event: BridgeRuntimeEvent) => void,
+  onError?: (event: Event) => void,
+) {
+  if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
+    return () => {};
+  }
+
+  const searchParams = new URLSearchParams();
+  if (options.sessionId) {
+    searchParams.set("sessionId", options.sessionId);
+  }
+  if (options.workspaceId) {
+    searchParams.set("workspaceId", options.workspaceId);
+  }
+
+  const query = searchParams.toString();
+  const streamUrl = query ? `/api/bridge/runtime/events?${query}` : "/api/bridge/runtime/events";
+  const source = new EventSource(streamUrl);
+
+  const handleMessage = (event: MessageEvent<string>) => {
+    const payload = event.data.trim();
+    if (!payload) {
+      return;
+    }
+
+    try {
+      onEvent(JSON.parse(payload) as BridgeRuntimeEvent);
+    } catch {}
+  };
+
+  const handleError = (event: Event) => {
+    onError?.(event);
+  };
+
+  source.addEventListener("message", handleMessage);
+  source.addEventListener("error", handleError);
+
+  return () => {
+    source.removeEventListener("message", handleMessage);
+    source.removeEventListener("error", handleError);
+    source.close();
+  };
 }
 
 async function getFileTree() {
@@ -153,8 +261,13 @@ export {
   getFilePreview,
   getFileTree,
   getSession,
+  getSessionMemories,
+  generateSessionMemory,
   openInFinder,
+  listMemories,
   listSessions,
+  listMemoriesByDate,
+  listMemoriesByTheme,
   listWorkspaces,
   openWorkspace,
   openWorkspacePicker,
@@ -162,6 +275,20 @@ export {
   removeWorkspace,
   runSession,
   runSessionStream,
+  subscribeRuntimeEvents,
   selectSession,
+  uploadSessionImage,
 };
-export type { FilePreview };
+export type { BridgeRuntimeEvent, FilePreview, SessionAttachment };
+
+async function fileToBase64(file: File) {
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary);
+}

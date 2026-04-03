@@ -1,8 +1,16 @@
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 
 import { readJsonBody } from "./json-body";
-import { CodexAppServerService, type AppServerThread, type AppServerTurn } from "../services/codex-app-server";
+import {
+  CodexAppServerService,
+  type AppServerThread,
+  type AppServerTurn,
+  type AppServerUserInput,
+} from "../services/codex-app-server";
+import { classifyBrokenThreadError, isThreadNotFoundError, type BrokenThreadReason } from "../services/broken-thread";
+import { RuntimeEventBus } from "../services/runtime-event-bus";
 import { SessionStore } from "../services/session-store";
 import { WorkspaceStore } from "../services/workspace-store";
 import type { Message, Session } from "@relay/shared-types";
@@ -11,6 +19,27 @@ const THREAD_LIST_CACHE_TTL_MS = 15_000;
 const threadListCache = new Map<string, { fetchedAt: number; items: Session[] }>();
 const threadListRefreshes = new Map<string, Promise<Session[]>>();
 const sessionDetailRefreshes = new Map<string, Promise<Session | null>>();
+const brokenThreadStates = new Map<string, BrokenThreadState>();
+
+type SessionSyncState = "idle" | "running" | "syncing" | "stale" | "broken";
+
+type BridgeSession = Session & {
+  cwd?: string;
+  source?: "fresh" | "snapshot";
+  syncState?: SessionSyncState;
+  brokenReason?: BrokenThreadReason;
+};
+
+type BrokenThreadState = {
+  reason: BrokenThreadReason;
+  updatedAt: string;
+  workspaceId?: string;
+};
+
+type ReadThreadResult =
+  | { kind: "ok"; thread: AppServerThread }
+  | { kind: "broken"; reason: BrokenThreadReason }
+  | { kind: "not_found" };
 
 async function handleSessionsRoute(
   request: IncomingMessage,
@@ -18,6 +47,7 @@ async function handleSessionsRoute(
   workspaceStore: WorkspaceStore,
   sessionStore: SessionStore,
   codexAppServerService: CodexAppServerService,
+  runtimeEventBus: RuntimeEventBus,
 ) {
   const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
   const forceFresh = requestUrl.searchParams.get("fresh") === "1";
@@ -35,32 +65,39 @@ async function handleSessionsRoute(
 
     if (activeWorkspace) {
       if (!forceFresh && snapshot) {
-        items = [...snapshot.items, ...sessionItems].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        items = [...snapshot.items, ...sessionItems].sort(compareSessionsByCreatedAtDesc);
         source = "snapshot";
         void refreshThreadSummaries(codexAppServerService, workspaceStore, activeWorkspace.localPath, activeWorkspace.id);
       } else {
-        items = [
-          ...(await getFreshThreadSummaries(
-            codexAppServerService,
-            workspaceStore,
-            activeWorkspace.localPath,
-            activeWorkspace.id,
-          )),
-          ...sessionItems,
-        ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        try {
+          items = [
+            ...(await getFreshThreadSummaries(
+              codexAppServerService,
+              workspaceStore,
+              activeWorkspace.localPath,
+              activeWorkspace.id,
+            )),
+            ...sessionItems,
+          ].sort(compareSessionsByCreatedAtDesc);
+        } catch {
+          items = [...(snapshot?.items ?? []), ...sessionItems].sort(compareSessionsByCreatedAtDesc);
+          source = "snapshot";
+        }
       }
     }
 
     const preferredSessionId = activeWorkspace
       ? workspaceStore.getPreferredSessionId(activeWorkspace.id)
       : null;
+    const responseItems = items.map((item) => withBrokenState(item));
     response.writeHead(200, { "content-type": "application/json" });
     response.end(
       JSON.stringify({
-        items,
+        items: responseItems,
         activeWorkspaceId: activeWorkspace?.id ?? null,
         preferredSessionId,
         source,
+        broken: collectBrokenItems(responseItems),
       }),
     );
     return true;
@@ -79,6 +116,7 @@ async function handleSessionsRoute(
     const item = sessionStore.create(activeWorkspace.id, body.title.trim() || "New Session");
     invalidateThreadListCache(activeWorkspace.localPath);
     workspaceStore.setPreferredSessionId(activeWorkspace.id, item.id);
+    publishThreadListChanged(runtimeEventBus, activeWorkspace.id, item.id);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ item }));
     return true;
@@ -89,21 +127,45 @@ async function handleSessionsRoute(
     const draftSession = sessionStore.get(sessionId);
     if (draftSession) {
       workspaceStore.setPreferredSessionId(draftSession.workspaceId, sessionId);
+      publishThreadUpdated(runtimeEventBus, sessionId, draftSession.workspaceId);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, sessionId, workspaceId: draftSession.workspaceId }));
       return true;
     }
 
-    const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
+    const readResult = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
 
-    if (!thread) {
+    if (readResult.kind === "not_found") {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "Session not found" }));
       return true;
     }
 
+    if (readResult.kind === "broken") {
+      const activeWorkspace = workspaceStore.getActive();
+      markBrokenThread(sessionId, readResult.reason, activeWorkspace?.id);
+      if (activeWorkspace) {
+        workspaceStore.setPreferredSessionId(activeWorkspace.id, sessionId);
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ok: false,
+          sessionId,
+          workspaceId: activeWorkspace?.id ?? null,
+          syncState: "broken",
+          brokenReason: readResult.reason,
+        }),
+      );
+      return true;
+    }
+
+    clearBrokenThread(sessionId);
+    const thread = readResult.thread;
     const workspaceId = resolveWorkspaceId(workspaceStore, thread.cwd);
     workspaceStore.setPreferredSessionId(workspaceId, sessionId);
+    publishThreadUpdated(runtimeEventBus, sessionId, workspaceId);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ ok: true, sessionId, workspaceId }));
     return true;
@@ -111,6 +173,7 @@ async function handleSessionsRoute(
 
   if (request.method === "GET" && requestUrl.pathname.startsWith("/sessions/")) {
     const sessionId = requestUrl.pathname.replace("/sessions/", "");
+    const knownBroken = brokenThreadStates.get(sessionId);
     const draftSession = sessionStore.get(sessionId);
     if (draftSession) {
       response.writeHead(200, { "content-type": "application/json" });
@@ -118,29 +181,68 @@ async function handleSessionsRoute(
       return true;
     }
 
+    if (!forceFresh && knownBroken) {
+      const snapshot = workspaceStore.getSessionDetailSnapshot(sessionId);
+      const item = withBrokenState(snapshot ?? createBrokenSession(sessionId, knownBroken.workspaceId), knownBroken);
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          item,
+          source: snapshot ? "snapshot" : "fresh",
+          syncState: "broken",
+          brokenReason: knownBroken.reason,
+        }),
+      );
+      return true;
+    }
+
     if (!forceFresh) {
       const snapshot = workspaceStore.getSessionDetailSnapshot(sessionId);
       if (snapshot) {
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ item: snapshot, source: "snapshot" }));
+        response.end(JSON.stringify({ item: withBrokenState(snapshot), source: "snapshot" }));
         void refreshSessionDetail(codexAppServerService, workspaceStore, sessionId);
         return true;
       }
     }
 
-    const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
+    const readResult = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
 
-    if (!thread) {
+    if (readResult.kind === "not_found") {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "Session not found" }));
       return true;
     }
 
+    if (readResult.kind === "broken") {
+      const activeWorkspace = workspaceStore.getActive();
+      markBrokenThread(sessionId, readResult.reason, activeWorkspace?.id);
+      const item = withBrokenState(createBrokenSession(sessionId, activeWorkspace?.id), {
+        reason: readResult.reason,
+        updatedAt: new Date().toISOString(),
+        workspaceId: activeWorkspace?.id,
+      });
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          item,
+          source: "fresh",
+          syncState: "broken",
+          brokenReason: readResult.reason,
+        }),
+      );
+      return true;
+    }
+
+    const thread = readResult.thread;
+    clearBrokenThread(sessionId);
     const item = mapThreadToSessionDetail(thread, resolveWorkspaceId(workspaceStore, thread.cwd));
     workspaceStore.saveSessionDetailSnapshot(item);
 
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ item, source: "fresh" }));
+    response.end(JSON.stringify({ item: withBrokenState(item), source: "fresh" }));
     return true;
   }
 
@@ -151,6 +253,8 @@ async function handleSessionsRoute(
       invalidateThreadListCacheForAllWorkspaces(workspaceStore);
       workspaceStore.clearSessionDetailSnapshot(sessionId);
       workspaceStore.clearPreferredSessionId(draftSession.workspaceId, sessionId);
+      publishThreadDeletedOrMissing(runtimeEventBus, sessionId, draftSession.workspaceId);
+      publishThreadListChanged(runtimeEventBus, draftSession.workspaceId, sessionId);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, archivedSessionId: sessionId }));
       return true;
@@ -160,6 +264,8 @@ async function handleSessionsRoute(
     invalidateThreadListCacheForAllWorkspaces(workspaceStore);
     workspaceStore.clearSessionDetailSnapshot(sessionId);
     clearPreferredSessionIdAcrossWorkspaces(workspaceStore, sessionId);
+    publishThreadDeletedOrMissing(runtimeEventBus, sessionId);
+    publishThreadListChanged(runtimeEventBus, null, sessionId);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ ok: true, archivedSessionId: sessionId }));
     return true;
@@ -184,19 +290,36 @@ async function handleSessionsRoute(
     }
 
     await codexAppServerService.threadSetName(sessionId, title);
-    const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
+    const readResult = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
 
-    if (!thread) {
+    if (readResult.kind === "not_found") {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "Session not found" }));
       return true;
     }
 
+    if (readResult.kind === "broken") {
+      markBrokenThread(sessionId, readResult.reason);
+      response.writeHead(409, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: "Session is unavailable",
+          syncState: "broken",
+          brokenReason: readResult.reason,
+        }),
+      );
+      return true;
+    }
+
+    const thread = readResult.thread;
+    clearBrokenThread(sessionId);
     const item = mapThreadToSessionDetail(thread, resolveWorkspaceId(workspaceStore, thread.cwd));
     workspaceStore.saveSessionDetailSnapshot(item);
     invalidateThreadListCache(thread.cwd);
+    publishThreadUpdated(runtimeEventBus, sessionId, item.workspaceId);
+    publishThreadListChanged(runtimeEventBus, item.workspaceId, sessionId);
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ ok: true, item }));
+    response.end(JSON.stringify({ ok: true, item: withBrokenState(item) }));
     return true;
   }
 
@@ -208,11 +331,29 @@ export { handleSessionsRoute };
 async function readThreadWithTurnsFallback(
   codexAppServerService: CodexAppServerService,
   threadId: string,
-) {
+) : Promise<ReadThreadResult> {
+  let firstError: unknown = null;
+
   try {
-    return await codexAppServerService.threadRead(threadId, true);
-  } catch {
-    return codexAppServerService.threadRead(threadId, false).catch(() => null);
+    return { kind: "ok", thread: await codexAppServerService.threadRead(threadId, true) };
+  } catch (error) {
+    firstError = error;
+  }
+
+  try {
+    return { kind: "ok", thread: await codexAppServerService.threadRead(threadId, false) };
+  } catch (fallbackError) {
+    const brokenReason =
+      classifyBrokenThreadError(fallbackError) ?? classifyBrokenThreadError(firstError);
+    if (brokenReason) {
+      return { kind: "broken", reason: brokenReason };
+    }
+
+    if (isThreadNotFoundError(fallbackError) || isThreadNotFoundError(firstError)) {
+      return { kind: "not_found" };
+    }
+
+    return { kind: "broken", reason: "thread_read_failed" };
   }
 }
 
@@ -299,12 +440,21 @@ function refreshSessionDetail(
   }
 
   const refresh = readThreadWithTurnsFallback(codexAppServerService, sessionId)
-    .then((thread) => {
-      if (!thread) {
+    .then((result) => {
+      if (result.kind === "not_found") {
         workspaceStore.clearSessionDetailSnapshot(sessionId);
+        clearBrokenThread(sessionId);
         return null;
       }
 
+      if (result.kind === "broken") {
+        const snapshot = workspaceStore.getSessionDetailSnapshot(sessionId);
+        markBrokenThread(sessionId, result.reason, snapshot?.workspaceId);
+        return snapshot ? withBrokenState(snapshot, brokenThreadStates.get(sessionId)) : null;
+      }
+
+      const thread = result.thread;
+      clearBrokenThread(sessionId);
       const session = mapThreadToSessionDetail(thread, resolveWorkspaceId(workspaceStore, thread.cwd));
       workspaceStore.saveSessionDetailSnapshot(session);
       return session;
@@ -325,19 +475,22 @@ function createWorkspaceIdFromPath(localPath: string) {
   return `workspace-${createHash("sha1").update(localPath).digest("hex").slice(0, 12)}`;
 }
 
-function mapThreadToSessionSummary(thread: AppServerThread, workspaceId: string): Session {
+function mapThreadToSessionSummary(thread: AppServerThread, workspaceId: string): BridgeSession {
   return {
     id: thread.id,
     workspaceId,
     title: thread.name ?? deriveTitle(thread),
     turnCount: thread.turns.length,
     messages: [],
+    cwd: thread.cwd,
+    source: "fresh",
+    syncState: "idle",
     createdAt: fromUnixSeconds(thread.createdAt),
     updatedAt: fromUnixSeconds(thread.updatedAt),
   };
 }
 
-function mapThreadToSessionDetail(thread: AppServerThread, workspaceId: string): Session {
+function mapThreadToSessionDetail(thread: AppServerThread, workspaceId: string): BridgeSession {
   const messages = flattenTurnsToMessages(thread.id, thread.turns, thread.createdAt);
 
   return {
@@ -346,6 +499,9 @@ function mapThreadToSessionDetail(thread: AppServerThread, workspaceId: string):
     title: thread.name ?? deriveTitle(thread),
     turnCount: messages.filter((message) => message.role === "user").length,
     messages,
+    cwd: thread.cwd,
+    source: "fresh",
+    syncState: "idle",
     createdAt: fromUnixSeconds(thread.createdAt),
     updatedAt: fromUnixSeconds(thread.updatedAt),
   };
@@ -365,10 +521,7 @@ function flattenTurnsToMessages(sessionId: string, turns: AppServerTurn[], creat
       const timestamp = new Date(baseMs + (turnIndex * 10 + itemIndex) * 1000).toISOString();
       const content =
         item.type === "userMessage"
-          ? item.content
-              .filter((part) => part.type === "text")
-              .map((part) => part.text)
-              .join("\n")
+          ? formatUserMessageContent(item.content)
           : item.text;
 
       messages.push({
@@ -387,6 +540,23 @@ function flattenTurnsToMessages(sessionId: string, turns: AppServerTurn[], creat
   return messages;
 }
 
+function formatUserMessageContent(content: AppServerUserInput[]) {
+  return content
+    .map((part) => {
+      if (part.type === "text") {
+        return part.text;
+      }
+
+      if (part.type === "localImage") {
+        return `[Image: ${path.basename(part.path)}]`;
+      }
+
+      return "[Image URL]";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function deriveTitle(thread: AppServerThread) {
   const preview = thread.preview.trim();
 
@@ -399,4 +569,105 @@ function deriveTitle(thread: AppServerThread) {
 
 function fromUnixSeconds(value: number) {
   return new Date(value * 1000).toISOString();
+}
+
+function compareSessionsByCreatedAtDesc(a: Session, b: Session) {
+  return b.createdAt.localeCompare(a.createdAt);
+}
+
+function createBrokenSession(sessionId: string, workspaceId?: string): BridgeSession {
+  const now = new Date().toISOString();
+
+  return {
+    id: sessionId,
+    workspaceId: workspaceId ?? "workspace-broken",
+    title: "Broken Session",
+    turnCount: 0,
+    messages: [],
+    source: "fresh",
+    syncState: "broken",
+    brokenReason: "thread_read_failed",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function markBrokenThread(sessionId: string, reason: BrokenThreadReason, workspaceId?: string) {
+  brokenThreadStates.set(sessionId, {
+    reason,
+    updatedAt: new Date().toISOString(),
+    workspaceId,
+  });
+}
+
+function clearBrokenThread(sessionId: string) {
+  brokenThreadStates.delete(sessionId);
+}
+
+function withBrokenState(session: Session, state = brokenThreadStates.get(session.id)): BridgeSession {
+  if (!state) {
+    return session as BridgeSession;
+  }
+
+  return {
+    ...(session as BridgeSession),
+    syncState: "broken",
+    brokenReason: state.reason,
+  };
+}
+
+function collectBrokenItems(items: Session[]) {
+  return items
+    .map((item) => {
+      const state = brokenThreadStates.get(item.id);
+      if (!state) {
+        return null;
+      }
+
+      return {
+        sessionId: item.id,
+        reason: state.reason,
+        updatedAt: state.updatedAt,
+      };
+    })
+    .filter((item): item is { sessionId: string; reason: BrokenThreadReason; updatedAt: string } => item !== null);
+}
+
+function publishThreadUpdated(
+  runtimeEventBus: RuntimeEventBus,
+  sessionId: string,
+  workspaceId: string | null,
+) {
+  runtimeEventBus.publish({
+    type: "thread.updated",
+    sessionId,
+    workspaceId,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function publishThreadListChanged(
+  runtimeEventBus: RuntimeEventBus,
+  workspaceId: string | null,
+  sessionId?: string,
+) {
+  runtimeEventBus.publish({
+    type: "thread.list.changed",
+    sessionId,
+    workspaceId,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function publishThreadDeletedOrMissing(
+  runtimeEventBus: RuntimeEventBus,
+  sessionId: string,
+  workspaceId?: string,
+) {
+  runtimeEventBus.publish({
+    type: "thread.deleted_or_missing",
+    sessionId,
+    workspaceId: workspaceId ?? null,
+    createdAt: new Date().toISOString(),
+  });
 }
