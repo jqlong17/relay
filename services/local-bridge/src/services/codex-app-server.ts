@@ -30,6 +30,23 @@ type AppServerItem =
       text: string;
     }
   | {
+      type: "plan";
+      id: string;
+      text: string;
+    }
+  | {
+      type: "reasoning";
+      id: string;
+      summary?: string[];
+      content?: string[];
+    }
+  | {
+      type: "commandExecution";
+      id: string;
+      command: string;
+      aggregatedOutput?: string | null;
+    }
+  | {
       type: string;
       id: string;
     };

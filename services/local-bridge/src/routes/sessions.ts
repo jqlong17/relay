@@ -513,21 +513,29 @@ function flattenTurnsToMessages(sessionId: string, turns: AppServerTurn[], creat
 
   turns.forEach((turn, turnIndex) => {
     turn.items.forEach((item, itemIndex) => {
-      if (item.type !== "userMessage" && item.type !== "agentMessage") {
+      if (
+        item.type !== "userMessage" &&
+        item.type !== "agentMessage" &&
+        item.type !== "plan" &&
+        item.type !== "reasoning" &&
+        item.type !== "commandExecution"
+      ) {
         return;
       }
 
       const sequence = messages.length + 1;
       const timestamp = new Date(baseMs + (turnIndex * 10 + itemIndex) * 1000).toISOString();
-      const content =
-        item.type === "userMessage"
-          ? formatUserMessageContent(item.content)
-          : item.text;
+      const content = formatThreadItemContent(item);
 
       messages.push({
         id: item.id,
         sessionId,
-        role: item.type === "userMessage" ? "user" : "assistant",
+        role:
+          item.type === "userMessage"
+            ? "user"
+            : item.type === "agentMessage"
+              ? "assistant"
+              : "system",
         content,
         status: turn.status === "failed" ? "error" : "completed",
         sequence,
@@ -555,6 +563,35 @@ function formatUserMessageContent(content: AppServerUserInput[]) {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+function formatThreadItemContent(
+  item:
+    | { type: "userMessage"; id: string; content: AppServerUserInput[] }
+    | { type: "agentMessage"; id: string; text: string }
+    | { type: "plan"; id: string; text: string }
+    | { type: "reasoning"; id: string; summary?: string[]; content?: string[] }
+    | { type: "commandExecution"; id: string; command: string; aggregatedOutput?: string | null },
+) {
+  if (item.type === "userMessage") {
+    return formatUserMessageContent(item.content);
+  }
+
+  if (item.type === "agentMessage") {
+    return item.text;
+  }
+
+  if (item.type === "plan") {
+    return `**Plan**\n${item.text}`;
+  }
+
+  if (item.type === "reasoning") {
+    const reasoningText = item.summary?.join("") || item.content?.join("") || "";
+    return `**Thinking**\n${reasoningText}`;
+  }
+
+  const output = item.aggregatedOutput?.trim() ? `\n${item.aggregatedOutput}` : "";
+  return `**Command**\n$ ${item.command}${output}`;
 }
 
 function deriveTitle(thread: AppServerThread) {

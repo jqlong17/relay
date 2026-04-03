@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -264,6 +264,13 @@ describe("MobileShell", () => {
           createdAt: "2026-04-03T00:00:00.000Z",
         });
         onEvent({
+          type: "process.delta",
+          runId: "run-1",
+          phase: "thinking",
+          delta: "Reviewing mobile composer flow.",
+          createdAt: "2026-04-03T00:00:00.500Z",
+        });
+        onEvent({
           type: "message.delta",
           runId: "run-1",
           messageId: "assistant-1",
@@ -292,6 +299,7 @@ describe("MobileShell", () => {
         messages: [
           makeMessage({ id: "m1", role: "assistant", content: "existing" }),
           makeMessage({ id: "m2", role: "user", content: "hello" }),
+          makeMessage({ id: "m-process", role: "system", content: "**Thinking**\nReviewing mobile composer flow." }),
           makeMessage({ id: "m3", role: "assistant", content: "streamed reply" }),
         ],
       }),
@@ -318,6 +326,8 @@ describe("MobileShell", () => {
 
     await waitFor(() => {
       expect(bridgeMocks.runSessionStream).toHaveBeenCalledWith("session-1", "hello", [], expect.any(Function));
+      expect(screen.getByText("Thinking")).toBeTruthy();
+      expect(screen.getByText(/Reviewing mobile composer flow/)).toBeTruthy();
       expect(screen.getByText("streamed reply")).toBeTruthy();
     });
   });
@@ -346,6 +356,46 @@ describe("MobileShell", () => {
     await waitFor(() => {
       expect(bridgeMocks.runSessionStream).toHaveBeenCalled();
       expect(screen.getAllByText("run failed").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("uploads pasted clipboard screenshots from the mobile composer", async () => {
+    bridgeMocks.uploadSessionImage.mockResolvedValue({
+      item: {
+        path: "/tmp/mobile-pasted-image.png",
+        name: "mobile-pasted-image.png",
+        mimeType: "image/png",
+      },
+    });
+
+    render(
+      <MobileShell
+        initialActiveSession={makeSessionDetail({
+          id: "session-1",
+          title: "alpha",
+          workspaceId: "workspace-1",
+          messages: [makeMessage({ id: "m1", role: "assistant", content: "existing" })],
+        })}
+        initialActiveWorkspace={makeWorkspace({ id: "workspace-1", name: "web-cli", isActive: true })}
+        initialSessions={[makeSessionSummary({ id: "session-1", title: "alpha", workspaceId: "workspace-1" })]}
+        initialWorkspaces={[makeWorkspace({ id: "workspace-1", name: "web-cli", isActive: true })]}
+        language="en"
+      />,
+    );
+
+    const input = screen.getByRole("textbox");
+    const file = new File(["image"], "Screenshot 2026-04-03.png", { type: "image/png" });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [file],
+        items: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(bridgeMocks.uploadSessionImage).toHaveBeenCalledWith("session-1", file);
+      expect(screen.getByRole("list", { name: "pasted images" }).textContent).toContain("图1");
     });
   });
 

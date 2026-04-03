@@ -41,6 +41,7 @@ import {
   uploadSessionImage,
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, FilePreview, SessionAttachment } from "@/lib/api/bridge";
+import { getClipboardImageFiles, readClipboardImageFiles } from "@/lib/clipboard";
 import { renderMarkdown } from "@/lib/markdown";
 
 type WorkspaceClientProps = {
@@ -153,8 +154,9 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     right: null,
     sidepanelPrimary: null,
   });
+  const firstMessageRef = useRef<HTMLElement | null>(null);
   const currentMessageRef = useRef<HTMLElement | null>(null);
-  const composerInputRef = useRef<HTMLInputElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const shellRef = useRef<HTMLElement | null>(null);
   const leftPanelRef = useRef<HTMLElement | null>(null);
   const rightPanelRef = useRef<HTMLElement | null>(null);
@@ -999,15 +1001,23 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     });
   }
 
-  async function handleComposerPaste(event: ReactClipboardEvent<HTMLInputElement>) {
+  function scrollToFirstMessage(behavior: ScrollBehavior) {
+    firstMessageRef.current?.scrollIntoView({
+      behavior,
+      block: "nearest",
+    });
+  }
+
+  async function handleComposerPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
     if (!activeSession) {
       return;
     }
 
-    const imageFiles = Array.from(event.clipboardData.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
+    let imageFiles = getClipboardImageFiles(event.clipboardData);
+
+    if (imageFiles.length === 0) {
+      imageFiles = await readClipboardImageFiles();
+    }
 
     if (imageFiles.length === 0) {
       return;
@@ -1190,9 +1200,14 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       <section className="panel panel-center workspace-center">
         <div className="workspace-header">
           <span className="eyebrow">{messages.workspace.eyebrow}</span>
-          <button className="workspace-header-link" onClick={() => scrollToCurrentMessage("smooth")} type="button">
-            {messages.workspace.latestMessage}
-          </button>
+          <div className="workspace-header-actions">
+            <button className="workspace-header-link" onClick={() => scrollToFirstMessage("smooth")} type="button">
+              {messages.workspace.earliestMessage}
+            </button>
+            <button className="workspace-header-link" onClick={() => scrollToCurrentMessage("smooth")} type="button">
+              {messages.workspace.latestMessage}
+            </button>
+          </div>
         </div>
 
         <div className="workspace-log workspace-timeline" ref={timelineRef}>
@@ -1210,7 +1225,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
               key={item.id}
               message={item}
               onLinkClick={handleMarkdownLinkClick}
-              ref={index === items.length - 1 ? currentMessageRef : null}
+              ref={index === 0 ? firstMessageRef : index === items.length - 1 ? currentMessageRef : null}
             />
           ))}
         </div>
@@ -1234,58 +1249,64 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
                 ))}
               </div>
             ) : null}
-            {attachments.length > 0 ? (
-              <div className="composer-attachments" role="list" aria-label="pasted images">
-                {attachments.map((attachment) => (
-                  <button
-                    className="composer-attachment-chip"
-                    key={attachment.path}
-                    onClick={() => handleRemoveAttachment(attachment.path)}
-                    type="button"
-                  >
-                    {attachment.name}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <input
-              className="composer-input composer-input-field"
-              onChange={(event) => handleComposerChange(event.target.value, event.target.selectionStart)}
-              onKeyDown={(event) => {
-                if (mentionQuery && filteredMentionCandidates.length > 0) {
-                  if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    setActiveMentionIndex((current) => (current + 1) % filteredMentionCandidates.length);
-                    return;
-                  }
+            <div className="composer-inline-row">
+              {attachments.length > 0 ? (
+                <div className="composer-attachments" role="list" aria-label="pasted images">
+                  {attachments.map((attachment, index) => (
+                    <button
+                      aria-label={`remove image ${index + 1}`}
+                      className="composer-attachment-chip"
+                      key={attachment.path}
+                      onClick={() => handleRemoveAttachment(attachment.path)}
+                      title={attachment.name}
+                      type="button"
+                    >
+                      <span className="composer-attachment-label">{`图${index + 1}`}</span>
+                      <span aria-hidden="true" className="composer-attachment-remove">×</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <textarea
+                className="composer-input composer-input-field"
+                onChange={(event) => handleComposerChange(event.target.value, event.target.selectionStart)}
+                onKeyDown={(event) => {
+                  if (mentionQuery && filteredMentionCandidates.length > 0) {
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      setActiveMentionIndex((current) => (current + 1) % filteredMentionCandidates.length);
+                      return;
+                    }
 
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    setActiveMentionIndex((current) => (current - 1 + filteredMentionCandidates.length) % filteredMentionCandidates.length);
-                    return;
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setActiveMentionIndex((current) => (current - 1 + filteredMentionCandidates.length) % filteredMentionCandidates.length);
+                      return;
+                    }
+
+                    if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                      event.preventDefault();
+                      handleSelectMention(filteredMentionCandidates[activeMentionIndex] ?? filteredMentionCandidates[0]);
+                      return;
+                    }
+
+                    if (event.key === "Escape") {
+                      setMentionQuery(null);
+                      return;
+                    }
                   }
 
                   if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-                    event.preventDefault();
-                    handleSelectMention(filteredMentionCandidates[activeMentionIndex] ?? filteredMentionCandidates[0]);
-                    return;
+                    void handleRun();
                   }
-
-                  if (event.key === "Escape") {
-                    setMentionQuery(null);
-                    return;
-                  }
-                }
-
-                if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-                  void handleRun();
-                }
-              }}
-              onPaste={handleComposerPaste}
-              placeholder={messages.workspace.composer}
-              ref={composerInputRef}
-              value={composerValue}
-            />
+                }}
+                onPaste={handleComposerPaste}
+                placeholder={messages.workspace.composer}
+                ref={composerInputRef}
+                rows={1}
+                value={composerValue}
+              />
+            </div>
             {mentionQuery ? (
               <div className="composer-mention-menu" role="listbox" aria-label="context suggestions">
                 {filteredMentionCandidates.length > 0 ? (
@@ -1543,6 +1564,9 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
                       key={item.title}
                       onClick={() => {
                         setComposerValue(item.prompt);
+                        queueMicrotask(() => {
+                          composerInputRef.current?.focus();
+                        });
                       }}
                       type="button"
                     >
@@ -1663,11 +1687,12 @@ function createOptimisticMessage(
   content: string,
   sequence: number,
   status: MessageStatus = "completed",
+  id = createClientMessageId(role),
 ): Message {
   const now = new Date().toISOString();
 
   return {
-    id: createClientMessageId(role),
+    id,
     sessionId,
     role,
     content,
@@ -1742,6 +1767,10 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
     return session;
   }
 
+  if (event.type === "process.delta") {
+    return upsertProcessMessage(session, assistantMessageId, event);
+  }
+
   if (event.type === "message.delta") {
     const messages: Message[] = session.messages.map((message) =>
       message.id === assistantMessageId
@@ -1765,7 +1794,9 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
 
   if (event.type === "message.completed" || event.type === "run.completed") {
     const messages: Message[] = session.messages.map((message) =>
-      message.id === assistantMessageId ? updateMessageStatus(message, "completed", event.createdAt) : message,
+      message.id === assistantMessageId || (message.role === "system" && message.status === "streaming")
+        ? updateMessageStatus(message, "completed", event.createdAt)
+        : message,
     );
 
     return {
@@ -1777,7 +1808,9 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
 
   if (event.type === "run.failed") {
     const messages: Message[] = session.messages.map((message) =>
-      message.id === assistantMessageId ? updateMessageStatus(message, "error", event.createdAt) : message,
+      message.id === assistantMessageId || (message.role === "system" && message.status === "streaming")
+        ? updateMessageStatus(message, "error", event.createdAt)
+        : message,
     );
 
     return {
@@ -1807,7 +1840,9 @@ function markStreamingMessageErrored(session: Session | null) {
   }
 
   const messages: Message[] = session.messages.map((message) =>
-    message.role === "assistant" && message.status === "streaming" ? updateMessageStatus(message, "error") : message,
+    (message.role === "assistant" || message.role === "system") && message.status === "streaming"
+      ? updateMessageStatus(message, "error")
+      : message,
   );
 
   return {
@@ -1823,6 +1858,91 @@ function updateMessageStatus(message: Message, status: MessageStatus, updatedAt 
     updatedAt,
   };
 }
+
+function upsertProcessMessage(
+  session: Session,
+  assistantMessageId: string,
+  event: Extract<RuntimeEvent, { type: "process.delta" }>,
+) {
+  const processMessageId = `${assistantMessageId}:${event.phase}`;
+  const existingMessage = session.messages.find((message) => message.id === processMessageId);
+  const nextContent = appendProcessContent(existingMessage?.content ?? "", event.phase, event.delta);
+
+  if (existingMessage) {
+    return {
+      ...session,
+      updatedAt: event.createdAt,
+      messages: session.messages.map((message) =>
+        message.id === processMessageId
+          ? updateMessageStatus(
+              {
+                ...message,
+                content: nextContent,
+              },
+              "streaming",
+              event.createdAt,
+            )
+          : message,
+      ),
+    };
+  }
+
+  const assistantIndex = session.messages.findIndex((message) => message.id === assistantMessageId);
+  const nextMessage = createOptimisticMessage(
+    session.id,
+    "system",
+    nextContent,
+    Math.max(1, session.messages.length),
+    "streaming",
+    processMessageId,
+  );
+  nextMessage.createdAt = event.createdAt;
+  nextMessage.updatedAt = event.createdAt;
+
+  const messages = [...session.messages];
+  const insertAt = assistantIndex >= 0 ? assistantIndex : messages.length;
+  messages.splice(insertAt, 0, nextMessage);
+
+  return {
+    ...session,
+    updatedAt: event.createdAt,
+    messages: resequenceMessages(messages),
+  };
+}
+
+function appendProcessContent(
+  current: string,
+  phase: Extract<RuntimeEvent, { type: "process.delta" }>["phase"],
+  delta: string,
+) {
+  const normalizedDelta = phase === "command" ? delta : delta.trimStart();
+  if (!normalizedDelta) {
+    return current;
+  }
+
+  const title = PROCESS_TITLES[phase];
+  const sectionHeader = `**${title}**\n`;
+  const sectionPrefix = current ? "\n\n" : "";
+
+  if (!current.includes(sectionHeader)) {
+    return `${current}${sectionPrefix}${sectionHeader}${normalizedDelta}`;
+  }
+
+  return `${current}${normalizedDelta}`;
+}
+
+function resequenceMessages(messages: Message[]) {
+  return messages.map((message, index) => ({
+    ...message,
+    sequence: index + 1,
+  }));
+}
+
+const PROCESS_TITLES = {
+  thinking: "Thinking",
+  plan: "Plan",
+  command: "Command",
+} as const;
 
 function buildVisibleFileTree(
   node: FileTreeNode | null,
@@ -1897,7 +2017,7 @@ function expandFileAncestors(filePath: string, setCollapsedFolders: Dispatch<Set
   });
 }
 
-function truncateSessionTitle(value: string, maxLength = 10) {
+function truncateSessionTitle(value: string, maxLength = 15) {
   const characters = Array.from(value);
 
   if (characters.length <= maxLength) {
@@ -2083,6 +2203,39 @@ function createWorkspaceActionPrompts(session: Session | null, linkedFiles: stri
       prompt: isZh
         ? `请整理这个 session 的时间线记忆：按时间线梳理对话摘要，保留必要细节和具体文件；提取用户明确做出的决策和理由，若理由未明说就不要补；识别用户真正关注什么、不关注什么。${sessionTitle}${referencedFiles}`.trim()
         : `Please create a timeline memory for this session: summarize the conversation as a timeline with concrete file details, extract only explicit user decisions and stated reasons, and identify what the user truly cared about or did not care about. ${sessionTitle}${referencedFiles}`.trim(),
+    },
+    {
+      title: isZh ? "自动化" : "automation",
+      description: isZh
+        ? "为当前工作区或当前会话设计一个可重复执行的自动化任务。"
+        : "Design a repeatable automation for the current workspace or session.",
+      prompt: isZh
+        ? [
+            "请基于当前上下文帮我设计一个 Codex 自动化。",
+            sessionTitle,
+            referencedFiles,
+            "请先给出一个最小可用方案，内容包括：",
+            "1. 这个自动化应该做什么",
+            "2. 适合的触发方式（按时间 / 按轮次 / 按关键词）",
+            "3. 建议的名称",
+            "4. 推荐的执行频率",
+            "5. 一段可以直接用于创建 automation 的 prompt",
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : [
+            "Please design a Codex automation based on the current context.",
+            sessionTitle,
+            referencedFiles,
+            "Start with a minimum viable setup and include:",
+            "1. what the automation should do",
+            "2. the best trigger mode (schedule / turn-based / keyword-based)",
+            "3. a suggested short name",
+            "4. a recommended run frequency",
+            "5. a prompt that can be used directly to create the automation",
+          ]
+            .filter(Boolean)
+            .join("\n"),
     },
   ];
 }

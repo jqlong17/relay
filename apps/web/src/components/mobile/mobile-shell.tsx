@@ -22,6 +22,7 @@ import {
   uploadSessionImage,
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, SessionAttachment } from "@/lib/api/bridge";
+import { getClipboardImageFiles, readClipboardImageFiles } from "@/lib/clipboard";
 
 type MobileShellProps = {
   initialActiveSession: Session | null;
@@ -486,10 +487,11 @@ export function MobileShell({
       return;
     }
 
-    const imageFiles = Array.from(event.clipboardData.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
+    let imageFiles = getClipboardImageFiles(event.clipboardData);
+
+    if (imageFiles.length === 0) {
+      imageFiles = await readClipboardImageFiles();
+    }
 
     if (imageFiles.length === 0) {
       return;
@@ -637,11 +639,12 @@ function createOptimisticMessage(
   content: string,
   sequence: number,
   status: MessageStatus = "completed",
+  id = `mobile-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
 ): Message {
   const now = new Date().toISOString();
 
   return {
-    id: `mobile-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    id,
     sessionId,
     role,
     content,
@@ -655,6 +658,10 @@ function createOptimisticMessage(
 function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assistantMessageId: string) {
   if (!session) {
     return session;
+  }
+
+  if (event.type === "process.delta") {
+    return upsertProcessMessage(session, assistantMessageId, event);
   }
 
   if (event.type === "message.delta") {
@@ -679,7 +686,9 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
 
   if (event.type === "message.completed" || event.type === "run.completed") {
     const messages: Message[] = session.messages.map((message) =>
-      message.id === assistantMessageId ? { ...message, status: "completed", updatedAt: event.createdAt } : message,
+      message.id === assistantMessageId || (message.role === "system" && message.status === "streaming")
+        ? { ...message, status: "completed", updatedAt: event.createdAt }
+        : message,
     );
 
     const nextSession: Session = {
@@ -692,7 +701,9 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
 
   if (event.type === "run.failed") {
     const messages: Message[] = session.messages.map((message) =>
-      message.id === assistantMessageId ? { ...message, status: "error", updatedAt: event.createdAt } : message,
+      message.id === assistantMessageId || (message.role === "system" && message.status === "streaming")
+        ? { ...message, status: "error", updatedAt: event.createdAt }
+        : message,
     );
 
     const nextSession: Session = {
@@ -723,7 +734,9 @@ function markStreamingMessageErrored(session: Session | null) {
   }
 
   const messages: Message[] = session.messages.map((message) =>
-    message.role === "assistant" && message.status === "streaming" ? { ...message, status: "error" } : message,
+    (message.role === "assistant" || message.role === "system") && message.status === "streaming"
+      ? { ...message, status: "error" }
+      : message,
   );
 
   const nextSession: Session = {
@@ -732,6 +745,91 @@ function markStreamingMessageErrored(session: Session | null) {
   };
   return nextSession;
 }
+
+function upsertProcessMessage(
+  session: Session,
+  assistantMessageId: string,
+  event: Extract<RuntimeEvent, { type: "process.delta" }>,
+) {
+  const processMessageId = `${assistantMessageId}:${event.phase}`;
+  const existingMessage = session.messages.find((message) => message.id === processMessageId);
+  const nextContent = appendProcessContent(existingMessage?.content ?? "", event.phase, event.delta);
+
+  if (existingMessage) {
+    const messages = session.messages.map((message) =>
+      message.id === processMessageId
+        ? {
+            ...message,
+            content: nextContent,
+            status: "streaming" as const,
+            updatedAt: event.createdAt,
+          }
+        : message,
+    );
+
+    return {
+      ...session,
+      updatedAt: event.createdAt,
+      messages,
+    };
+  }
+
+  const assistantIndex = session.messages.findIndex((message) => message.id === assistantMessageId);
+  const nextMessage = createOptimisticMessage(
+    session.id,
+    "system",
+    nextContent,
+    Math.max(1, session.messages.length),
+    "streaming",
+    processMessageId,
+  );
+  nextMessage.createdAt = event.createdAt;
+  nextMessage.updatedAt = event.createdAt;
+
+  const messages = [...session.messages];
+  const insertAt = assistantIndex >= 0 ? assistantIndex : messages.length;
+  messages.splice(insertAt, 0, nextMessage);
+
+  return {
+    ...session,
+    updatedAt: event.createdAt,
+    messages: resequenceMessages(messages),
+  };
+}
+
+function appendProcessContent(
+  current: string,
+  phase: Extract<RuntimeEvent, { type: "process.delta" }>["phase"],
+  delta: string,
+) {
+  const normalizedDelta = phase === "command" ? delta : delta.trimStart();
+  if (!normalizedDelta) {
+    return current;
+  }
+
+  const title = PROCESS_TITLES[phase];
+  const sectionHeader = `**${title}**\n`;
+  const sectionPrefix = current ? "\n\n" : "";
+
+  if (!current.includes(sectionHeader)) {
+    return `${current}${sectionPrefix}${sectionHeader}${normalizedDelta}`;
+  }
+
+  return `${current}${normalizedDelta}`;
+}
+
+function resequenceMessages(messages: Message[]) {
+  return messages.map((message, index) => ({
+    ...message,
+    sequence: index + 1,
+  }));
+}
+
+const PROCESS_TITLES = {
+  thinking: "Thinking",
+  plan: "Plan",
+  command: "Command",
+} as const;
 
 type MobileSnapshot = {
   activeSession: Session | null;

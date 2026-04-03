@@ -150,6 +150,174 @@ describe("runtime route", () => {
     expect(runData.events[runData.events.length - 1]?.type).toBe("run.completed");
   });
 
+  it("emits process events for reasoning, planning, and command execution", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runtime-process-"));
+    tempDirs.push(workspacePath);
+    const threads: AppServerThread[] = [];
+
+    activeServer = createBridgeServer({
+      codexAppServerService: new CodexAppServerService({
+        async threadStart({ cwd }) {
+          const now = Math.floor(Date.now() / 1000);
+          const thread: AppServerThread = {
+            id: "thread-runtime-process",
+            preview: "",
+            createdAt: now,
+            updatedAt: now,
+            cwd,
+            name: null,
+            turns: [],
+          };
+          threads.push(thread);
+          return thread;
+        },
+        async threadSetName(threadId, name) {
+          const thread = threads.find((item) => item.id === threadId);
+          if (thread) {
+            thread.name = name;
+          }
+        },
+        async threadRead(threadId) {
+          const thread = threads.find((item) => item.id === threadId);
+          if (!thread) {
+            throw new Error("thread not found");
+          }
+          return thread;
+        },
+        async startTurnStream(threadId) {
+          async function* notifications(): AsyncIterable<AppServerNotification> {
+            yield {
+              method: "item/reasoning/summaryTextDelta",
+              params: {
+                threadId,
+                turnId: "turn-process",
+                itemId: "reasoning-1",
+                delta: "Inspecting current implementation.",
+                summaryIndex: 0,
+              },
+            };
+            yield {
+              method: "item/plan/delta",
+              params: {
+                threadId,
+                turnId: "turn-process",
+                itemId: "plan-1",
+                delta: "Check paste handler.",
+              },
+            };
+            yield {
+              method: "item/started",
+              params: {
+                threadId,
+                turnId: "turn-process",
+                item: {
+                  type: "commandExecution",
+                  id: "command-1",
+                  command: "rg -n paste .",
+                },
+              },
+            };
+            yield {
+              method: "item/commandExecution/outputDelta",
+              params: {
+                threadId,
+                turnId: "turn-process",
+                itemId: "command-1",
+                delta: "apps/web/src/components/workspace-client.tsx:1001\n",
+              },
+            };
+            yield {
+              method: "item/agentMessage/delta",
+              params: {
+                threadId,
+                turnId: "turn-process",
+                itemId: "message-1",
+                delta: "Done.",
+              },
+            };
+            yield {
+              method: "item/completed",
+              params: {
+                threadId,
+                turnId: "turn-process",
+                item: { type: "agentMessage", id: "message-1", text: "Done." },
+              },
+            };
+            yield {
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: { id: "turn-process", status: "completed", error: null },
+              },
+            };
+          }
+
+          return { turnId: "turn-process", notifications: notifications() };
+        },
+      }),
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      activeServer?.listen(0, "127.0.0.1", (error?: Error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+
+    const address = activeServer.address() as AddressInfo;
+    await fetch(`http://127.0.0.1:${address.port}/workspaces/open`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ localPath: workspacePath }),
+    });
+
+    const createSessionResponse = await fetch(`http://127.0.0.1:${address.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Process task" }),
+    });
+    const sessionData = (await createSessionResponse.json()) as { item: { id: string } };
+
+    const runResponse = await fetch(`http://127.0.0.1:${address.port}/runtime/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: sessionData.item.id, content: "Show process updates" }),
+    });
+    const runData = (await runResponse.json()) as {
+      events: Array<{ type: string; phase?: string; delta?: string }>;
+    };
+
+    expect(runResponse.status).toBe(200);
+    expect(runData.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "process.delta",
+          phase: "thinking",
+          delta: "Inspecting current implementation.",
+        }),
+        expect.objectContaining({
+          type: "process.delta",
+          phase: "plan",
+          delta: "Check paste handler.",
+        }),
+        expect.objectContaining({
+          type: "process.delta",
+          phase: "command",
+          delta: "$ rg -n paste .\n",
+        }),
+        expect.objectContaining({
+          type: "process.delta",
+          phase: "command",
+          delta: "apps/web/src/components/workspace-client.tsx:1001\n",
+        }),
+      ]),
+    );
+  });
+
   it("keeps a materialized session visible in the session list immediately after run", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runtime-visible-"));
     tempDirs.push(workspacePath);
