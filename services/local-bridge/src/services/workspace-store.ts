@@ -3,9 +3,23 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { Workspace } from "@relay/shared-types";
+import { RelayStateStore } from "./relay-state-store";
 
 class WorkspaceStore {
   private readonly workspaces = new Map<string, Workspace>();
+  private readonly relayStateStore: RelayStateStore;
+
+  constructor(relayStateStore = new RelayStateStore()) {
+    this.relayStateStore = relayStateStore;
+
+    for (const workspace of relayStateStore.getWorkspaces()) {
+      if (fs.existsSync(workspace.localPath) && fs.statSync(workspace.localPath).isDirectory()) {
+        this.workspaces.set(workspace.id, workspace);
+      }
+    }
+
+    this.persist();
+  }
 
   list() {
     return [...this.workspaces.values()].sort((a, b) => {
@@ -49,6 +63,7 @@ class WorkspaceStore {
     if (existing) {
       existing.isActive = true;
       existing.updatedAt = now;
+      this.persist();
       return existing;
     }
 
@@ -62,6 +77,7 @@ class WorkspaceStore {
     };
 
     this.workspaces.set(workspace.id, workspace);
+    this.persist();
     return workspace;
   }
 
@@ -84,7 +100,27 @@ class WorkspaceStore {
       }
     }
 
+    this.relayStateStore.clearPreferredSessionId(workspaceId);
+    this.persist();
     return workspace;
+  }
+
+  getPreferredSessionId(workspaceId: string) {
+    return this.relayStateStore.getPreferredSessionId(workspaceId);
+  }
+
+  setPreferredSessionId(workspaceId: string, sessionId: string) {
+    this.relayStateStore.setPreferredSessionId(workspaceId, sessionId);
+  }
+
+  clearPreferredSessionId(workspaceId: string, sessionId?: string) {
+    this.relayStateStore.clearPreferredSessionId(workspaceId, sessionId);
+  }
+
+  private persist() {
+    const items = [...this.workspaces.values()];
+    this.relayStateStore.saveWorkspaces(items);
+    this.relayStateStore.pruneWorkspacePreferences(new Set(items.map((workspace) => workspace.id)));
   }
 }
 

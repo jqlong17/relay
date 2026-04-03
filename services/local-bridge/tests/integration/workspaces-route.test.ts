@@ -9,6 +9,7 @@ import { createBridgeServer } from "../../src";
 
 let activeServer: ReturnType<typeof createBridgeServer> | undefined;
 const tempDirs: string[] = [];
+const originalRelayStateFilePath = process.env.RELAY_STATE_FILE_PATH;
 
 afterEach(async () => {
   while (tempDirs.length > 0) {
@@ -31,13 +32,31 @@ afterEach(async () => {
     });
     activeServer = undefined;
   }
+
+  if (originalRelayStateFilePath === undefined) {
+    delete process.env.RELAY_STATE_FILE_PATH;
+  } else {
+    process.env.RELAY_STATE_FILE_PATH = originalRelayStateFilePath;
+  }
 });
+
+function createIsolatedBridgeServer(
+  ...args: Parameters<typeof createBridgeServer>
+): ReturnType<typeof createBridgeServer> {
+  const stateFilePath = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "relay-state-")),
+    "local-bridge-state.json",
+  );
+  tempDirs.push(path.dirname(stateFilePath));
+  process.env.RELAY_STATE_FILE_PATH = stateFilePath;
+  return createBridgeServer(...args);
+}
 
 describe("workspaces routes", () => {
   it("opens a local directory as the active workspace", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-workspace-"));
     tempDirs.push(workspacePath);
-    activeServer = createBridgeServer();
+    activeServer = createIsolatedBridgeServer();
 
     await new Promise<void>((resolve, reject) => {
       activeServer?.listen(0, "127.0.0.1", (error?: Error) => {
@@ -76,7 +95,7 @@ describe("workspaces routes", () => {
   it("opens a workspace via the native picker route", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-workspace-picker-"));
     tempDirs.push(workspacePath);
-    activeServer = createBridgeServer({
+    activeServer = createIsolatedBridgeServer({
       workspacePicker: async () => workspacePath,
     });
 
@@ -108,7 +127,7 @@ describe("workspaces routes", () => {
   });
 
   it("returns canceled when the picker is dismissed", async () => {
-    activeServer = createBridgeServer({
+    activeServer = createIsolatedBridgeServer({
       workspacePicker: async () => null,
     });
 
@@ -142,7 +161,7 @@ describe("workspaces routes", () => {
     const firstWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-workspace-first-"));
     const secondWorkspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-workspace-second-"));
     tempDirs.push(firstWorkspacePath, secondWorkspacePath);
-    activeServer = createBridgeServer();
+    activeServer = createIsolatedBridgeServer();
 
     await new Promise<void>((resolve, reject) => {
       activeServer?.listen(0, "127.0.0.1", (error?: Error) => {

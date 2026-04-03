@@ -43,6 +43,7 @@ type AppServerRequestHandlers = {
   threadList?: (params: { cwd: string }) => Promise<AppServerThread[]>;
   threadStart?: (params: { cwd: string }) => Promise<AppServerThread>;
   threadRead?: (threadId: string, includeTurns: boolean) => Promise<AppServerThread>;
+  threadResume?: (threadId: string) => Promise<AppServerThread>;
   threadArchive?: (threadId: string) => Promise<void>;
   threadSetName?: (threadId: string, name: string) => Promise<void>;
   startTurnStream?: (
@@ -100,6 +101,19 @@ class CodexAppServerService {
     return result.thread;
   }
 
+  async threadResume(threadId: string) {
+    if (this.handlers.threadResume) {
+      return this.handlers.threadResume(threadId);
+    }
+
+    const result = (await this.request("thread/resume", {
+      threadId,
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+    })) as { thread: AppServerThread };
+    return result.thread;
+  }
+
   async threadArchive(threadId: string) {
     if (this.handlers.threadArchive) {
       return this.handlers.threadArchive(threadId);
@@ -122,6 +136,13 @@ class CodexAppServerService {
     }
 
     await this.ensureInitialized();
+    try {
+      await this.threadResume(threadId);
+    } catch (error) {
+      if (!isMissingRolloutError(error)) {
+        throw error;
+      }
+    }
     const queue = new AsyncNotificationQueue<AppServerNotification>();
     let activeTurnId: string | null = null;
 
@@ -275,6 +296,10 @@ class CodexAppServerService {
       this.notificationListeners.delete(listener);
     };
   }
+}
+
+function isMissingRolloutError(error: unknown) {
+  return error instanceof Error && error.message.includes("no rollout found for thread id");
 }
 
 class AsyncNotificationQueue<T> implements AsyncIterable<T> {

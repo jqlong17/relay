@@ -17,6 +17,7 @@ import {
   listWorkspaces,
   openWorkspace,
   runSessionStream,
+  selectSession,
 } from "@/lib/api/bridge";
 
 type MobileShellProps = {
@@ -42,7 +43,7 @@ export function MobileShell({
   const [activeSession, setActiveSession] = useState<Session | null>(initialActiveSession);
   const [composerValue, setComposerValue] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(initialWorkspaces.length === 0 && initialSessions.length === 0);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
   const [isWorkspaceDrawerOpen, setIsWorkspaceDrawerOpen] = useState(false);
   const [isRunning, startRunTransition] = useTransition();
@@ -55,8 +56,10 @@ export function MobileShell({
     new Map<string, Session>(initialActiveSession ? [[initialActiveSession.id, initialActiveSession]] : []),
   );
 
-  const refreshMobileData = useCallback(async (nextSessionId?: string) => {
-    setIsLoading(true);
+  const refreshMobileData = useCallback(async (nextSessionId?: string, options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsLoading(true);
+    }
     setError(null);
 
     try {
@@ -67,7 +70,7 @@ export function MobileShell({
       setActiveWorkspace(currentWorkspace);
       setSessions(sessionData.items);
 
-      const targetSessionId = nextSessionId ?? sessionData.items[0]?.id;
+      const targetSessionId = nextSessionId ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id;
       if (!targetSessionId) {
         setActiveSession(null);
         return;
@@ -82,13 +85,15 @@ export function MobileShell({
       setActiveWorkspace(null);
       setActiveSession(null);
     } finally {
-      setIsLoading(false);
+      if (!options?.silent) {
+        setIsLoading(false);
+      }
     }
   }, [bridgeOfflineMessage]);
 
   useEffect(() => {
     if (!hasInitialSnapshot) {
-      void refreshMobileData();
+      void refreshMobileData(undefined, { silent: true });
     }
   }, [hasInitialSnapshot, refreshMobileData]);
 
@@ -99,15 +104,30 @@ export function MobileShell({
 
     const root = document.documentElement;
     const viewport = window.visualViewport;
+    const userAgent = window.navigator.userAgent;
+    const isAppleMobile = /iPhone|iPad|iPod/i.test(userAgent);
+    const isSafari = /Safari/i.test(userAgent) && !/CriOS|FxiOS|EdgiOS|OPiOS/i.test(userAgent);
+    const isIosSafari = isAppleMobile && isSafari;
 
     const updateViewportOffset = () => {
       if (!viewport) {
         root.style.setProperty("--mobile-viewport-bottom-offset", "0px");
+        root.style.setProperty("--mobile-ios-bottom-boost", isIosSafari ? "52px" : "0px");
         return;
       }
 
       const bottomOffset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      const iosBottomBoost =
+        isIosSafari
+          ? bottomOffset < 8
+            ? "56px"
+            : bottomOffset < 48
+              ? "22px"
+              : "0px"
+          : "0px";
+
       root.style.setProperty("--mobile-viewport-bottom-offset", `${bottomOffset}px`);
+      root.style.setProperty("--mobile-ios-bottom-boost", iosBottomBoost);
     };
 
     updateViewportOffset();
@@ -117,6 +137,7 @@ export function MobileShell({
       return () => {
         window.removeEventListener("resize", updateViewportOffset);
         root.style.removeProperty("--mobile-viewport-bottom-offset");
+        root.style.removeProperty("--mobile-ios-bottom-boost");
       };
     }
 
@@ -129,6 +150,7 @@ export function MobileShell({
       viewport.removeEventListener("scroll", updateViewportOffset);
       window.removeEventListener("orientationchange", updateViewportOffset);
       root.style.removeProperty("--mobile-viewport-bottom-offset");
+      root.style.removeProperty("--mobile-ios-bottom-boost");
     };
   }, []);
 
@@ -147,6 +169,7 @@ export function MobileShell({
   async function handleSelectSession(sessionId: string) {
     try {
       setError(null);
+      void selectSession(sessionId);
       const detail = await loadSessionDetail(sessionId, sessionCacheRef.current);
       setActiveSession(detail);
       setIsSessionDrawerOpen(false);
@@ -187,6 +210,8 @@ export function MobileShell({
     }
 
     const prompt = composerValue.trim();
+    const originalSessionId = activeSession.id;
+    let materializedSessionId = originalSessionId;
     const userMessage = createOptimisticMessage(activeSession.id, "user", prompt, activeSession.messages.length + 1);
     const assistantMessage = createOptimisticMessage(
       activeSession.id,
@@ -217,7 +242,23 @@ export function MobileShell({
     startRunTransition(() => {
       void (async () => {
         try {
-          await runSessionStream(activeSession.id, prompt, (event) => {
+          await runSessionStream(originalSessionId, prompt, (event) => {
+            if (event.type === "run.started" && event.sessionId !== materializedSessionId) {
+              materializedSessionId = event.sessionId;
+              setActiveSession((current) =>
+                current && current.id === originalSessionId
+                  ? {
+                      ...current,
+                      id: event.sessionId,
+                      messages: current.messages.map((message) => ({
+                        ...message,
+                        sessionId: event.sessionId,
+                      })),
+                    }
+                  : current,
+              );
+            }
+
             setActiveSession((current) => {
               const nextSession = applyStreamingEvent(current, event, assistantMessage.id);
               if (nextSession) {
@@ -228,7 +269,7 @@ export function MobileShell({
             queueMicrotask(scrollToLatest);
           });
 
-          const refreshedSession = await loadSessionDetail(activeSession.id, sessionCacheRef.current, true);
+          const refreshedSession = await loadSessionDetail(materializedSessionId, sessionCacheRef.current, true);
           setActiveSession(refreshedSession);
           queueMicrotask(scrollToLatest);
         } catch (runError) {

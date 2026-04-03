@@ -139,7 +139,8 @@ describe("runtime route", () => {
     };
 
     expect(runResponse.status).toBe(200);
-    expect(runData.sessionId).toBe(sessionData.item.id);
+    expect(runData.sessionId).toBe("thread-runtime-1");
+    expect(runData.sessionId).not.toBe(sessionData.item.id);
     expect(runData.events[0]?.type).toBe("run.started");
     expect(runData.events[runData.events.length - 1]?.type).toBe("run.completed");
   });
@@ -258,6 +259,97 @@ describe("runtime route", () => {
       "run.completed",
     ]);
     expect(events[1]?.delta).toBe("hello");
+  });
+
+  it("replaces a draft session id with the materialized thread id on first run", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runtime-draft-"));
+    tempDirs.push(workspacePath);
+    const threads: AppServerThread[] = [];
+
+    activeServer = createBridgeServer({
+      codexAppServerService: new CodexAppServerService({
+        async threadStart({ cwd }) {
+          const now = Math.floor(Date.now() / 1000);
+          const thread: AppServerThread = {
+            id: "thread-runtime-draft-1",
+            preview: "",
+            createdAt: now,
+            updatedAt: now,
+            cwd,
+            name: null,
+            turns: [],
+          };
+          threads.push(thread);
+          return thread;
+        },
+        async threadSetName(threadId, name) {
+          const thread = threads.find((item) => item.id === threadId);
+          if (thread) {
+            thread.name = name;
+          }
+        },
+        async threadRead(threadId) {
+          const thread = threads.find((item) => item.id === threadId);
+          if (!thread) {
+            throw new Error("thread not found");
+          }
+          return thread;
+        },
+        async startTurnStream(threadId) {
+          async function* notifications(): AsyncIterable<AppServerNotification> {
+            yield {
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: { id: "turn-draft-1", status: "completed", error: null },
+              },
+            };
+          }
+
+          return { turnId: "turn-draft-1", notifications: notifications() };
+        },
+      }),
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      activeServer?.listen(0, "127.0.0.1", (error?: Error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+
+    const address = activeServer.address() as AddressInfo;
+    await fetch(`http://127.0.0.1:${address.port}/workspaces/open`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ localPath: workspacePath }),
+    });
+
+    const createSessionResponse = await fetch(`http://127.0.0.1:${address.port}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Draft task" }),
+    });
+    const sessionData = (await createSessionResponse.json()) as { item: { id: string } };
+
+    const runResponse = await fetch(`http://127.0.0.1:${address.port}/runtime/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: sessionData.item.id, content: "hello" }),
+    });
+    const runData = (await runResponse.json()) as {
+      sessionId: string;
+      events: Array<{ type: string; sessionId?: string }>;
+    };
+
+    expect(runResponse.status).toBe(200);
+    expect(runData.sessionId).toBe("thread-runtime-draft-1");
+    expect(runData.sessionId).not.toBe(sessionData.item.id);
+    expect(runData.events[0]).toMatchObject({ type: "run.started", sessionId: "thread-runtime-draft-1" });
   });
 
   it("continues runtime for an existing thread even when no workspace is active", async () => {

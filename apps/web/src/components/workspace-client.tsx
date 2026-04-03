@@ -19,6 +19,7 @@ import {
   renameSession,
   removeWorkspace,
   runSessionStream,
+  selectSession,
 } from "@/lib/api/bridge";
 import type { FilePreview } from "@/lib/api/bridge";
 
@@ -116,7 +117,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
         setPreview(null);
       }
 
-      const targetSessionId = nextSessionId ?? sessionData.items[0]?.id;
+      const targetSessionId = nextSessionId ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id;
       setActiveSessionId(targetSessionId ?? null);
       activeSessionIdRef.current = targetSessionId ?? null;
 
@@ -201,6 +202,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
       setError(null);
       setActiveSessionId(sessionId);
       activeSessionIdRef.current = sessionId;
+      void selectSession(sessionId);
       const cachedSession = sessionCacheRef.current.get(sessionId);
 
       if (cachedSession) {
@@ -421,6 +423,8 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     }
 
     const prompt = composerValue.trim();
+    const originalSessionId = activeSession.id;
+    let materializedSessionId = originalSessionId;
     setComposerValue("");
     shouldFollowCurrentRunRef.current = true;
 
@@ -453,7 +457,25 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
             scrollToCurrentMessage("smooth");
           });
 
-          await runSessionStream(activeSession.id, prompt, (event) => {
+          await runSessionStream(originalSessionId, prompt, (event) => {
+            if (event.type === "run.started" && event.sessionId !== materializedSessionId) {
+              materializedSessionId = event.sessionId;
+              setActiveSessionId(event.sessionId);
+              activeSessionIdRef.current = event.sessionId;
+              setActiveSession((current) =>
+                current && current.id === originalSessionId
+                  ? {
+                      ...current,
+                      id: event.sessionId,
+                      messages: current.messages.map((message) => ({
+                        ...message,
+                        sessionId: event.sessionId,
+                      })),
+                    }
+                  : current,
+              );
+            }
+
             setActiveSession((current) => {
               const nextSession = applyStreamingEvent(current, event, assistantMessage.id);
               if (nextSession) {
@@ -468,7 +490,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
             });
           });
 
-          await refreshWorkspaceData(activeSession.id);
+          await refreshWorkspaceData(materializedSessionId);
           queueMicrotask(() => {
             scrollToCurrentMessage("smooth");
           });
@@ -555,7 +577,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
                           onMouseEnter={() => handlePrefetchSession(session.id)}
                           type="button"
                         >
-                          <h3>{session.title}</h3>
+                          <h3>{truncateSessionTitle(session.title)}</h3>
                         </button>
                       </div>
                     </article>
@@ -845,7 +867,12 @@ function formatMessageTime(value: string) {
     return value;
   }
 
-  return value.slice(11, 19);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assistantMessageId: string) {
@@ -1064,4 +1091,14 @@ function escapeHtml(value: string) {
 
 function escapeHtmlAttribute(value: string) {
   return escapeHtml(value);
+}
+
+function truncateSessionTitle(value: string, maxLength = 10) {
+  const characters = Array.from(value);
+
+  if (characters.length <= maxLength) {
+    return value;
+  }
+
+  return `${characters.slice(0, maxLength).join("")}...`;
 }

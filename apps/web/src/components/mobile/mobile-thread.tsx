@@ -45,7 +45,12 @@ function formatMessageTime(value: string) {
     return value;
   }
 
-  return value.slice(11, 19);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function renderMarkdown(markdown: string) {

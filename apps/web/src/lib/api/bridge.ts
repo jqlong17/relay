@@ -36,7 +36,7 @@ async function removeWorkspace(workspaceId: string) {
 }
 
 async function listSessions() {
-  return fetchJson<{ items: Session[]; activeWorkspaceId: string | null }>("/api/bridge/sessions");
+  return fetchJson<{ items: Session[]; activeWorkspaceId: string | null; preferredSessionId?: string | null }>("/api/bridge/sessions");
 }
 
 async function createSession(title: string) {
@@ -60,6 +60,12 @@ async function renameSession(sessionId: string, title: string) {
   return fetchJson<{ ok: boolean; item: Session }>(`/api/bridge/sessions/${sessionId}?action=rename`, {
     method: "POST",
     body: JSON.stringify({ title }),
+  });
+}
+
+async function selectSession(sessionId: string) {
+  return fetchJson<{ ok: boolean; sessionId: string; workspaceId: string }>(`/api/bridge/sessions/${sessionId}?action=select`, {
+    method: "POST",
   });
 }
 
@@ -142,5 +148,6 @@ export {
   removeWorkspace,
   runSession,
   runSessionStream,
+  selectSession,
 };
 export type { FilePreview };

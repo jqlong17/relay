@@ -34,4 +34,15 @@ describe("SessionStore", () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.workspaceId).toBe("workspace-1");
   });
+
+  it("renames and removes a session", () => {
+    const store = new SessionStore();
+    const session = store.create("workspace-1", "Task A");
+
+    const renamed = store.rename(session.id, "Task A renamed");
+
+    expect(renamed?.title).toBe("Task A renamed");
+    expect(store.remove(session.id)?.id).toBe(session.id);
+    expect(store.get(session.id)).toBeUndefined();
+  });
 });

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FileTreeNode, Session, Workspace } from "@relay/shared-types";
 import { getMessages } from "@/config/messages";
 import type { AppLanguage } from "@/config/ui.config";
-import { getFilePreview, getFileTree, getSession, listSessions, listWorkspaces, openWorkspace } from "@/lib/api/bridge";
+import { getFilePreview, getFileTree, getSession, listSessions, listWorkspaces, openWorkspace, selectSession } from "@/lib/api/bridge";
 import type { FilePreview } from "@/lib/api/bridge";
 
 type SessionsClientProps = {
@@ -99,7 +99,7 @@ export function SessionsClient({ language }: SessionsClientProps) {
         return;
       }
 
-      const targetSessionId = activeSessionId ?? sessionData.items[0]?.id ?? null;
+      const targetSessionId = activeSessionId ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id ?? null;
       if (!targetSessionId) {
         return;
       }
@@ -130,6 +130,7 @@ export function SessionsClient({ language }: SessionsClientProps) {
     try {
       setError(null);
       setPreview(null);
+      void selectSession(sessionId);
       await loadSessionDetail(sessionId, workspaces);
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : bridgeOfflineMessage);
@@ -205,7 +206,7 @@ export function SessionsClient({ language }: SessionsClientProps) {
                   key={session.id}
                 >
                   <button className="session-row session-main-button" onClick={() => void handleSelectSession(session.id)} type="button">
-                    <h3>{session.title}</h3>
+                    <h3>{truncateSessionTitle(session.title)}</h3>
                     <span className="session-rail-time">{formatRelativeSessionTime(session.updatedAt)}</span>
                   </button>
                 </article>
@@ -488,4 +489,14 @@ function formatRelativeSessionTime(timestamp: string) {
 
   const diffDays = Math.round(diffHours / 24);
   return `${diffDays} d ago`;
+}
+
+function truncateSessionTitle(value: string, maxLength = 10) {
+  const characters = Array.from(value);
+
+  if (characters.length <= maxLength) {
+    return value;
+  }
+
+  return `${characters.slice(0, maxLength).join("")}...`;
 }

@@ -32,6 +32,27 @@ class SessionStore {
     return this.sessions.get(sessionId);
   }
 
+  remove(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return null;
+    }
+
+    this.sessions.delete(sessionId);
+    return session;
+  }
+
+  rename(sessionId: string, title: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return null;
+    }
+
+    session.title = title;
+    session.updatedAt = new Date().toISOString();
+    return session;
+  }
+
   appendMessage(sessionId: string, role: MessageRole, content: string): Message {
     const session = this.sessions.get(sessionId);
 

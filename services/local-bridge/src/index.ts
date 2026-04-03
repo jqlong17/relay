@@ -7,10 +7,12 @@ import { handleSessionsRoute } from "./routes/sessions";
 import { handleWorkspacesRoute } from "./routes/workspaces";
 import { CodexAppServerService } from "./services/codex-app-server";
 import { pickWorkspaceFolder } from "./services/workspace-picker";
+import { SessionStore } from "./services/session-store";
 import { WorkspaceStore } from "./services/workspace-store";
 
 type BridgeServerDependencies = {
   workspaceStore?: WorkspaceStore;
+  sessionStore?: SessionStore;
   codexAppServerService?: CodexAppServerService;
   workspacePicker?: () => Promise<string | null>;
   finderOpener?: (targetPath: string, isDirectory: boolean) => void;
@@ -18,6 +20,7 @@ type BridgeServerDependencies = {
 
 function createBridgeServer(dependencies: BridgeServerDependencies = {}) {
   const workspaceStore = dependencies.workspaceStore ?? new WorkspaceStore();
+  const sessionStore = dependencies.sessionStore ?? new SessionStore();
   const codexAppServerService =
     dependencies.codexAppServerService ?? new CodexAppServerService();
   const workspacePicker = dependencies.workspacePicker ?? pickWorkspaceFolder;
@@ -33,7 +36,7 @@ function createBridgeServer(dependencies: BridgeServerDependencies = {}) {
         return;
       }
 
-      if (await handleSessionsRoute(request, response, workspaceStore, codexAppServerService)) {
+      if (await handleSessionsRoute(request, response, workspaceStore, sessionStore, codexAppServerService)) {
         return;
       }
 
@@ -42,6 +45,7 @@ function createBridgeServer(dependencies: BridgeServerDependencies = {}) {
           request,
           response,
           workspaceStore,
+          sessionStore,
           codexAppServerService,
         )
       ) {

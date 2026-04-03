@@ -4,19 +4,28 @@ import type { RuntimeEvent } from "@relay/shared-types";
 
 import { readJsonBody } from "./json-body";
 import { CodexAppServerService, type AppServerNotification } from "../services/codex-app-server";
+import { SessionStore } from "../services/session-store";
 import { WorkspaceStore } from "../services/workspace-store";
 
 async function handleRuntimeRoute(
   request: IncomingMessage,
   response: ServerResponse<IncomingMessage>,
   workspaceStore: WorkspaceStore,
+  sessionStore: SessionStore,
   codexAppServerService: CodexAppServerService,
 ) {
   const runtimeUrl = new URL(request.url ?? "/", "http://127.0.0.1");
 
   if (request.method === "POST" && runtimeUrl.pathname === "/runtime/run") {
     const body = await readJsonBody<{ sessionId: string; content: string }>(request);
-    const thread = await codexAppServerService.threadRead(body.sessionId, false).catch(() => null);
+    const draftSession = sessionStore.get(body.sessionId);
+    const draftWorkspace = draftSession ? workspaceStore.get(draftSession.workspaceId) : null;
+
+    let sessionId = body.sessionId;
+    let thread =
+      draftSession && draftWorkspace
+        ? await codexAppServerService.threadStart({ cwd: draftWorkspace.localPath })
+        : await codexAppServerService.threadRead(body.sessionId, false).catch(() => null);
 
     if (!thread) {
       response.writeHead(404, { "content-type": "application/json" });
@@ -24,9 +33,16 @@ async function handleRuntimeRoute(
       return true;
     }
 
-    const turnStream = await codexAppServerService.startTurnStream(body.sessionId, body.content);
+    if (draftSession) {
+      await codexAppServerService.threadSetName(thread.id, draftSession.title);
+      sessionStore.remove(draftSession.id);
+      workspaceStore.setPreferredSessionId(draftSession.workspaceId, thread.id);
+      sessionId = thread.id;
+    }
+
+    const turnStream = await codexAppServerService.startTurnStream(sessionId, body.content);
     const stream = mapAppServerNotificationsToRuntimeEvents(
-      body.sessionId,
+      sessionId,
       turnStream.turnId,
       turnStream.notifications,
     );
@@ -45,7 +61,7 @@ async function handleRuntimeRoute(
 
     const events = await collectRuntimeEvents(stream);
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ sessionId: body.sessionId, events }));
+    response.end(JSON.stringify({ sessionId, events }));
     return true;
   }
 

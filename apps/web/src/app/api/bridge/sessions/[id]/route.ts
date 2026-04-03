@@ -29,6 +29,12 @@ export async function POST(request: Request, context: RouteContext) {
     });
   }
 
+  if (action === "select") {
+    return proxyBridge(`/sessions/${id}/select`, {
+      method: "POST",
+    });
+  }
+
   return new Response(JSON.stringify({ error: "Not Found" }), {
     status: 404,
     headers: { "content-type": "application/json" },

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import { readJsonBody } from "./json-body";
 import { CodexAppServerService, type AppServerThread, type AppServerTurn } from "../services/codex-app-server";
+import { SessionStore } from "../services/session-store";
 import { WorkspaceStore } from "../services/workspace-store";
 import type { Message, Session } from "@relay/shared-types";
 
@@ -10,17 +11,30 @@ async function handleSessionsRoute(
   request: IncomingMessage,
   response: ServerResponse<IncomingMessage>,
   workspaceStore: WorkspaceStore,
+  sessionStore: SessionStore,
   codexAppServerService: CodexAppServerService,
 ) {
   if (request.method === "GET" && request.url === "/sessions") {
     const activeWorkspace = workspaceStore.getActive();
     const items = activeWorkspace
-      ? (await codexAppServerService.threadList({ cwd: activeWorkspace.localPath })).map((thread) =>
-          mapThreadToSessionSummary(thread, activeWorkspace.id),
-        )
+      ? [
+          ...(await codexAppServerService.threadList({ cwd: activeWorkspace.localPath })).map((thread) =>
+            mapThreadToSessionSummary(thread, activeWorkspace.id),
+          ),
+          ...sessionStore.list(activeWorkspace.id),
+        ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       : [];
+    const preferredSessionId = activeWorkspace
+      ? workspaceStore.getPreferredSessionId(activeWorkspace.id)
+      : null;
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ items, activeWorkspaceId: activeWorkspace?.id ?? null }));
+    response.end(
+      JSON.stringify({
+        items,
+        activeWorkspaceId: activeWorkspace?.id ?? null,
+        preferredSessionId,
+      }),
+    );
     return true;
   }
 
@@ -34,17 +48,47 @@ async function handleSessionsRoute(
     }
 
     const body = await readJsonBody<{ title: string }>(request);
-    const thread = await codexAppServerService.threadStart({ cwd: activeWorkspace.localPath });
-    await codexAppServerService.threadSetName(thread.id, body.title);
-    const refreshedThread = await codexAppServerService.threadRead(thread.id, false);
-    const item = mapThreadToSessionSummary(refreshedThread, activeWorkspace.id);
+    const item = sessionStore.create(activeWorkspace.id, body.title.trim() || "New Session");
+    workspaceStore.setPreferredSessionId(activeWorkspace.id, item.id);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ item }));
     return true;
   }
 
+  if (request.method === "POST" && request.url?.startsWith("/sessions/") && request.url.endsWith("/select")) {
+    const sessionId = request.url.replace("/sessions/", "").replace("/select", "");
+    const draftSession = sessionStore.get(sessionId);
+    if (draftSession) {
+      workspaceStore.setPreferredSessionId(draftSession.workspaceId, sessionId);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, sessionId, workspaceId: draftSession.workspaceId }));
+      return true;
+    }
+
+    const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
+
+    if (!thread) {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "Session not found" }));
+      return true;
+    }
+
+    const workspaceId = resolveWorkspaceId(workspaceStore, thread.cwd);
+    workspaceStore.setPreferredSessionId(workspaceId, sessionId);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, sessionId, workspaceId }));
+    return true;
+  }
+
   if (request.method === "GET" && request.url?.startsWith("/sessions/")) {
     const sessionId = request.url.replace("/sessions/", "");
+    const draftSession = sessionStore.get(sessionId);
+    if (draftSession) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ item: draftSession }));
+      return true;
+    }
+
     const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
 
     if (!thread) {
@@ -62,7 +106,20 @@ async function handleSessionsRoute(
 
   if (request.method === "POST" && request.url?.startsWith("/sessions/") && request.url.endsWith("/archive")) {
     const sessionId = request.url.replace("/sessions/", "").replace("/archive", "");
+    const draftSession = sessionStore.remove(sessionId);
+    if (draftSession) {
+      workspaceStore.clearPreferredSessionId(draftSession.workspaceId, sessionId);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, archivedSessionId: sessionId }));
+      return true;
+    }
+
+    const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
     await codexAppServerService.threadArchive(sessionId);
+    if (thread) {
+      const workspaceId = resolveWorkspaceId(workspaceStore, thread.cwd);
+      workspaceStore.clearPreferredSessionId(workspaceId, sessionId);
+    }
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ ok: true, archivedSessionId: sessionId }));
     return true;
@@ -76,6 +133,13 @@ async function handleSessionsRoute(
     if (!title) {
       response.writeHead(400, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "Missing session title" }));
+      return true;
+    }
+
+    const renamedDraft = sessionStore.rename(sessionId, title);
+    if (renamedDraft) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, item: renamedDraft }));
       return true;
     }
 
