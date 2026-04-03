@@ -1,9 +1,11 @@
 import type { Workspace } from "@relay/shared-types";
 
 type MobileWorkspaceDrawerProps = {
+  activeWorkspaceId: string | null;
   closeLabel: string;
   emptyLabel: string;
   isOpen: boolean;
+  pendingWorkspaceId: string | null;
   title: string;
   workspaces: Workspace[];
   onClose: () => void;
@@ -11,9 +13,11 @@ type MobileWorkspaceDrawerProps = {
 };
 
 export function MobileWorkspaceDrawer({
+  activeWorkspaceId,
   closeLabel,
   emptyLabel,
   isOpen,
+  pendingWorkspaceId,
   title,
   workspaces,
   onClose,
@@ -32,7 +36,12 @@ export function MobileWorkspaceDrawer({
         <div className="mobile-drawer-list">
           {workspaces.length === 0 ? <div className="mobile-empty">{emptyLabel}</div> : null}
           {workspaces.map((workspace) => (
-            <button className="mobile-drawer-item" key={workspace.id} onClick={() => onSelect(workspace)} type="button">
+            <button
+              className={`mobile-drawer-item ${activeWorkspaceId === workspace.id ? "mobile-drawer-item-active" : ""} ${pendingWorkspaceId === workspace.id ? "mobile-drawer-item-pending" : ""}`}
+              key={workspace.id}
+              onClick={() => onSelect(workspace)}
+              type="button"
+            >
               {workspace.name}
             </button>
           ))}

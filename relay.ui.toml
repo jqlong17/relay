@@ -3,7 +3,7 @@
 # 推荐只修改你明确知道用途的字段。未写出的字段会继续使用系统默认值。
 
 # 全局界面语言：zh / en
-language = "en"
+language = "zh"
 
 [layout]
 # 顶部导航栏高度
@@ -12,8 +12,14 @@ topbarHeight = "40px"
 # workspace 页面左侧 workspace/session 列表宽度
 workspaceLeftWidth = "240px"
 
-# workspace 页面右侧 files 面板宽度
-workspaceRightWidth = "340px"
+# workspace 页面中间主区域的最小宽度
+workspaceCenterMinWidth = "360px"
+
+# workspace 页面右侧 context 面板宽度
+workspaceRightWidth = "min(50vw, 720px)"
+
+# workspace 页面右侧 files 列默认宽度
+workspaceSidepanelPrimaryWidth = "420px"
 
 # workspace 页面中，对话块的最大宽度
 # 这个值越大，越不容易换行
@@ -40,34 +46,24 @@ memoriesRightMinWidth = "420px"
 # 中间主内容区的横向内边距
 panelCenterXPadding = "40px"
 
-[color]
-# 主文本颜色
-text = "#e6ebf3"
-
-# 次级文本颜色
-textSoft = "#b4bdcb"
-
-# 更弱一级的辅助文本
-textDim = "#7f8897"
-
 [typography]
 # 最小一档 meta 字号：时间、状态、小标签
-metaXs = "0.72rem"
+metaXs = "0.68rem"
 
 # 常规 meta 字号：eyebrow、次级说明、文件树等
-meta = "0.76rem"
+meta = "0.72rem"
 
 # 小号正文：对话、输入框、次级正文
-uiSm = "0.82rem"
+uiSm = "0.76rem"
 
 # 常规正文
-ui = "0.86rem"
+ui = "0.8rem"
 
 # 导航和较重要列表项
-nav = "0.88rem"
+nav = "0.82rem"
 
 # 小标题
-titleSm = "0.98rem"
+titleSm = "0.94rem"
 
 # 页面级标题
-title = "1.04rem"
+title = "1rem"

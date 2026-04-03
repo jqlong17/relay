@@ -67,6 +67,10 @@ class CodexAppServerService {
 
   constructor(private readonly handlers: AppServerRequestHandlers = {}) {}
 
+  async warm() {
+    await this.ensureInitialized();
+  }
+
   async threadList(params: { cwd: string }) {
     if (this.handlers.threadList) {
       return this.handlers.threadList(params);

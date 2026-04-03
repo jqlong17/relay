@@ -28,7 +28,7 @@ function createBridgeServer(dependencies: BridgeServerDependencies = {}) {
 
   return http.createServer((request, response) => {
     void (async () => {
-      if (await handleWorkspacesRoute(request, response, workspaceStore, workspacePicker)) {
+      if (await handleWorkspacesRoute(request, response, workspaceStore, workspacePicker, codexAppServerService)) {
         return;
       }
 

@@ -1,6 +1,20 @@
 "use client";
 
-import { type Dispatch, type MouseEvent, type SetStateAction, useCallback, useEffect, useRef, useState, useTransition } from "react";
+import {
+  type CSSProperties,
+  forwardRef,
+  memo,
+  type Dispatch,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 
 import type { FileTreeNode, Message, MessageStatus, RuntimeEvent, Session, Workspace } from "@relay/shared-types";
 import { getMessages } from "@/config/messages";
@@ -22,10 +36,24 @@ import {
   selectSession,
 } from "@/lib/api/bridge";
 import type { FilePreview } from "@/lib/api/bridge";
+import { renderMarkdown } from "@/lib/markdown";
 
 type WorkspaceClientProps = {
   language: AppLanguage;
+  layout?: {
+    workspaceLeftWidth: string;
+    workspaceCenterMinWidth: string;
+    workspaceRightWidth: string;
+    workspaceSidepanelPrimaryWidth: string;
+  };
 };
+
+const DEFAULT_WORKSPACE_LAYOUT = {
+  workspaceLeftWidth: "240px",
+  workspaceCenterMinWidth: "360px",
+  workspaceRightWidth: "min(50vw, 720px)",
+  workspaceSidepanelPrimaryWidth: "420px",
+} as const;
 
 type VisibleFileTreeNode = {
   id: string;
@@ -43,7 +71,30 @@ type SessionContextMenuState = {
   top: number;
 };
 
-export function WorkspaceClient({ language }: WorkspaceClientProps) {
+type LoadedSessionDetail = Awaited<ReturnType<typeof getSession>>;
+
+type WorkspaceSidePanelMode = "files" | "summary" | "actions";
+
+type WorkspaceResizeHandle = "left" | "right" | "sidepanel";
+
+type WorkspaceLayoutWidths = {
+  left: number | null;
+  right: number | null;
+  sidepanelPrimary: number | null;
+};
+
+type CssVariableStyle = CSSProperties & Record<string, string>;
+
+const WORKSPACE_LAYOUT_STORAGE_KEY = "relay.workspace.layout.v1";
+const WORKSPACE_LEFT_MIN_WIDTH = 200;
+const WORKSPACE_CENTER_MIN_WIDTH = 320;
+const WORKSPACE_RIGHT_MIN_WIDTH = 360;
+const WORKSPACE_SIDEPANEL_PRIMARY_MIN_WIDTH = 240;
+const WORKSPACE_SIDEPANEL_SECONDARY_MIN_WIDTH = 240;
+const WORKSPACE_RESIZER_WIDTH = 8;
+
+export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
+  const workspaceLayout = layout ?? DEFAULT_WORKSPACE_LAYOUT;
   const messages = getMessages(language);
   const bridgeOfflineMessage = messages.workspace.bridgeOffline;
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -55,9 +106,12 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
   const [composerValue, setComposerValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSessionsLoading, setIsSessionsLoading] = useState(true);
+  const [isActiveSessionLoading, setIsActiveSessionLoading] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<FilePreview | null>(null);
-  const [isFilesPanelCollapsed, setIsFilesPanelCollapsed] = useState(false);
+  const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(false);
+  const [sidePanelMode, setSidePanelMode] = useState<WorkspaceSidePanelMode>("summary");
   const [archiveCandidate, setArchiveCandidate] = useState<Session | null>(null);
   const [renameCandidate, setRenameCandidate] = useState<Session | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -65,18 +119,110 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
   const [sessionContextMenu, setSessionContextMenu] = useState<SessionContextMenuState | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
   const [isRunning, startRunTransition] = useTransition();
+  const [isSwitchingSession, startSessionSwitchTransition] = useTransition();
+  const [layoutWidths, setLayoutWidths] = useState<WorkspaceLayoutWidths>({
+    left: null,
+    right: null,
+    sidepanelPrimary: null,
+  });
   const currentMessageRef = useRef<HTMLElement | null>(null);
+  const shellRef = useRef<HTMLElement | null>(null);
   const leftPanelRef = useRef<HTMLElement | null>(null);
+  const rightPanelRef = useRef<HTMLElement | null>(null);
+  const sidepanelFilesBodyRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowCurrentRunRef = useRef(false);
   const sessionCacheRef = useRef(new Map<string, Session>());
-  const pendingSessionRequestsRef = useRef(new Map<string, Promise<Session>>());
+  const pendingSessionRequestsRef = useRef(new Map<string, Promise<LoadedSessionDetail>>());
   const activeSessionIdRef = useRef<string | null>(null);
+  const sessionSelectionRequestIdRef = useRef(0);
+  const dragStateRef = useRef<{
+    handle: WorkspaceResizeHandle;
+    shellWidth: number;
+    sidepanelBodyWidth: number;
+    startLeft: number;
+    startRight: number;
+    startSidepanelPrimary: number;
+    startX: number;
+  } | null>(null);
+  const layoutInitRef = useRef(false);
+  const sessionsByWorkspace = useMemo(() => {
+    const grouped = new Map<string, Session[]>();
+
+    for (const session of sessions) {
+      const current = grouped.get(session.workspaceId);
+      if (current) {
+        current.push(session);
+      } else {
+        grouped.set(session.workspaceId, [session]);
+      }
+    }
+
+    return grouped;
+  }, [sessions]);
+  const visibleFileTree = useMemo(() => buildVisibleFileTree(fileTree, collapsedFolders), [fileTree, collapsedFolders]);
+  const previewHtml = useMemo(() => {
+    if (!preview || preview.extension !== ".md") {
+      return null;
+    }
+
+    return renderMarkdown(preview.content);
+  }, [preview]);
+  const linkedFiles = useMemo(
+    () => collectSessionLinkedFiles(activeSession?.messages ?? []),
+    [activeSession],
+  );
+  const actionPrompts = useMemo(
+    () => createWorkspaceActionPrompts(activeSession, linkedFiles, language),
+    [activeSession, language, linkedFiles],
+  );
+  const timelineSummaryItems = useMemo(
+    () => createTimelineSummaryItems(activeSession),
+    [activeSession],
+  );
+  const workspaceShellStyle = useMemo(() => {
+    const style: CssVariableStyle = {};
+
+    style["--workspace-left-width"] = workspaceLayout.workspaceLeftWidth;
+    style["--workspace-center-min-width"] = workspaceLayout.workspaceCenterMinWidth;
+    style["--workspace-right-width"] = workspaceLayout.workspaceRightWidth;
+
+    if (layoutWidths.left) {
+      style["--workspace-left-width-runtime"] = `${layoutWidths.left}px`;
+    }
+
+    if (layoutWidths.right) {
+      style["--workspace-right-width-runtime"] = `${layoutWidths.right}px`;
+    }
+
+    return style;
+  }, [
+    layoutWidths.left,
+    layoutWidths.right,
+    workspaceLayout.workspaceCenterMinWidth,
+    workspaceLayout.workspaceLeftWidth,
+    workspaceLayout.workspaceRightWidth,
+  ]);
+  const sidepanelFilesBodyStyle = useMemo(() => {
+    const style: CssVariableStyle = {};
+
+    style["--workspace-sidepanel-primary-width"] = workspaceLayout.workspaceSidepanelPrimaryWidth;
+
+    if (layoutWidths.sidepanelPrimary) {
+      style["--workspace-sidepanel-primary-width-runtime"] =
+        `${layoutWidths.sidepanelPrimary}px`;
+    }
+
+    return style;
+  }, [layoutWidths.sidepanelPrimary, workspaceLayout.workspaceSidepanelPrimaryWidth]);
 
   const loadSessionDetail = useCallback(async (sessionId: string) => {
     const cachedSession = sessionCacheRef.current.get(sessionId);
     if (cachedSession) {
-      return cachedSession;
+      return {
+        item: cachedSession,
+        source: "snapshot" as const,
+      };
     }
 
     const pendingRequest = pendingSessionRequestsRef.current.get(sessionId);
@@ -87,7 +233,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     const request = getSession(sessionId)
       .then((sessionDetail) => {
         cacheSessionDetail(sessionCacheRef.current, sessionDetail.item);
-        return sessionDetail.item;
+        return sessionDetail;
       })
       .finally(() => {
         pendingSessionRequestsRef.current.delete(sessionId);
@@ -97,16 +243,49 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     return request;
   }, []);
 
+  const refreshSessionDetailInBackground = useCallback(async (sessionId: string) => {
+    try {
+      const sessionDetail = await getSession(sessionId, { fresh: true });
+      cacheSessionDetail(sessionCacheRef.current, sessionDetail.item);
+
+      if (activeSessionIdRef.current === sessionId) {
+        setActiveSession(sessionDetail.item);
+      }
+    } catch {}
+  }, []);
+
+  const refreshSessionListInBackground = useCallback(async (nextSessionId?: string) => {
+    try {
+      const freshSessionData = await listSessions({ fresh: true });
+      setSessions(freshSessionData.items);
+
+      const targetSessionId =
+        nextSessionId ?? activeSessionIdRef.current ?? freshSessionData.preferredSessionId ?? freshSessionData.items[0]?.id ?? null;
+
+      if (targetSessionId) {
+        const freshDetail = await getSession(targetSessionId, { fresh: true });
+        cacheSessionDetail(sessionCacheRef.current, freshDetail.item);
+
+        if (activeSessionIdRef.current === targetSessionId) {
+          setActiveSession(freshDetail.item);
+        }
+      }
+    } catch {}
+  }, []);
+
   const refreshWorkspaceData = useCallback(async (nextSessionId?: string) => {
     setIsLoading(true);
+    setIsSessionsLoading(true);
     setError(null);
 
+    const workspacePromise = listWorkspaces();
+    const sessionsPromise = listSessions();
+
     try {
-      const [workspaceData, sessionData] = await Promise.all([listWorkspaces(), listSessions()]);
+      const workspaceData = await workspacePromise;
       const currentWorkspace = workspaceData.active;
 
       setWorkspaces(workspaceData.items);
-      setSessions(sessionData.items);
 
       if (currentWorkspace) {
         const treeData = await getFileTree();
@@ -117,13 +296,25 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
         setPreview(null);
       }
 
+      setIsLoading(false);
+
+      const sessionData = await sessionsPromise;
+      setSessions(sessionData.items);
+      setIsSessionsLoading(false);
+
       const targetSessionId = nextSessionId ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id;
       setActiveSessionId(targetSessionId ?? null);
       activeSessionIdRef.current = targetSessionId ?? null;
 
       if (targetSessionId) {
+        setIsActiveSessionLoading(true);
         const sessionDetail = await loadSessionDetail(targetSessionId);
-        setActiveSession(sessionDetail);
+        setActiveSession(sessionDetail.item);
+        setIsActiveSessionLoading(false);
+
+        if (sessionDetail.source === "snapshot") {
+          void refreshSessionDetailInBackground(targetSessionId);
+        }
 
         const preloadSessionIds = sessionData.items
           .map((session) => session.id)
@@ -132,6 +323,11 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
         void Promise.allSettled(preloadSessionIds.map((sessionId) => loadSessionDetail(sessionId)));
       } else {
         setActiveSession(null);
+        setIsActiveSessionLoading(false);
+      }
+
+      if (sessionData.source === "snapshot") {
+        void refreshSessionListInBackground(targetSessionId);
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : bridgeOfflineMessage);
@@ -140,10 +336,12 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
       setActiveSessionId(null);
       setActiveSession(null);
       setFileTree(null);
+      setIsSessionsLoading(false);
+      setIsActiveSessionLoading(false);
     } finally {
       setIsLoading(false);
     }
-  }, [bridgeOfflineMessage, loadSessionDetail]);
+  }, [bridgeOfflineMessage, loadSessionDetail, refreshSessionDetailInBackground, refreshSessionListInBackground]);
 
   useEffect(() => {
     void refreshWorkspaceData();
@@ -166,6 +364,112 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
       window.removeEventListener("scroll", handleClose, true);
     };
   }, [sessionContextMenu]);
+
+  useEffect(() => {
+    if (layoutInitRef.current) {
+      return;
+    }
+
+    const shell = shellRef.current;
+    const leftPanel = leftPanelRef.current;
+    const rightPanel = rightPanelRef.current;
+
+    if (!shell || !leftPanel || !rightPanel) {
+      return;
+    }
+
+    const storedLayout = readWorkspaceLayout();
+    const measuredLeft = Math.round(leftPanel.getBoundingClientRect().width);
+    const measuredRight = Math.round(rightPanel.getBoundingClientRect().width);
+    const defaultSidepanelPrimary =
+      parseCssPixelValue(getComputedStyle(document.documentElement).getPropertyValue("--workspace-sidepanel-primary-width")) ??
+      Math.round(measuredRight / 2);
+
+    layoutInitRef.current = true;
+    setLayoutWidths({
+      left: storedLayout?.left ?? measuredLeft,
+      right: storedLayout?.right ?? measuredRight,
+      sidepanelPrimary: storedLayout?.sidepanelPrimary ?? defaultSidepanelPrimary,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!layoutInitRef.current) {
+      return;
+    }
+
+    writeWorkspaceLayout(layoutWidths);
+  }, [layoutWidths]);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      setLayoutWidths((current) => clampWorkspaceLayout(current, shell.clientWidth, sidepanelFilesBodyRef.current?.clientWidth ?? 0));
+    });
+
+    observer.observe(shell);
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    function handlePointerMove(event: PointerEvent) {
+      const dragState = dragStateRef.current;
+      if (!dragState) {
+        return;
+      }
+
+      const delta = event.clientX - dragState.startX;
+
+      setLayoutWidths((current) => {
+        const next = { ...current };
+
+        if (dragState.handle === "left") {
+          next.left = clampNumber(
+            dragState.startLeft + delta,
+            WORKSPACE_LEFT_MIN_WIDTH,
+            dragState.shellWidth - dragState.startRight - WORKSPACE_CENTER_MIN_WIDTH,
+          );
+        }
+
+        if (dragState.handle === "right") {
+          next.right = clampNumber(
+            dragState.startRight - delta,
+            WORKSPACE_RIGHT_MIN_WIDTH,
+            dragState.shellWidth - dragState.startLeft - WORKSPACE_CENTER_MIN_WIDTH,
+          );
+        }
+
+        if (dragState.handle === "sidepanel") {
+          next.sidepanelPrimary = clampNumber(
+            dragState.startSidepanelPrimary + delta,
+            WORKSPACE_SIDEPANEL_PRIMARY_MIN_WIDTH,
+            dragState.sidepanelBodyWidth - WORKSPACE_RESIZER_WIDTH - WORKSPACE_SIDEPANEL_SECONDARY_MIN_WIDTH,
+          );
+        }
+
+        return next;
+      });
+    }
+
+    function handlePointerUp() {
+      dragStateRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, []);
 
   async function handleOpenWorkspace() {
     try {
@@ -193,43 +497,64 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     }
   }
 
-  async function handleSelectSession(sessionId: string) {
+  const handleSelectSession = useCallback(async (sessionId: string) => {
     if (activeSessionIdRef.current === sessionId) {
       return;
     }
+
+    const requestId = ++sessionSelectionRequestIdRef.current;
 
     try {
       setError(null);
       setActiveSessionId(sessionId);
       activeSessionIdRef.current = sessionId;
-      void selectSession(sessionId);
+      setIsActiveSessionLoading(true);
+      void selectSession(sessionId).catch(() => {});
       const cachedSession = sessionCacheRef.current.get(sessionId);
 
       if (cachedSession) {
-        setActiveSession(cachedSession);
+        if (sessionSelectionRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        startSessionSwitchTransition(() => {
+          setActiveSession(cachedSession);
+        });
+        setIsActiveSessionLoading(false);
         scrollTimelineToLatest();
         return;
       }
 
       const sessionDetail = await loadSessionDetail(sessionId);
-      if (activeSessionIdRef.current === sessionId) {
-        setActiveSession(sessionDetail);
+      if (sessionSelectionRequestIdRef.current === requestId && activeSessionIdRef.current === sessionId) {
+        startSessionSwitchTransition(() => {
+          setActiveSession(sessionDetail.item);
+        });
+        setIsActiveSessionLoading(false);
         scrollTimelineToLatest();
+      }
+
+      if (sessionDetail.source === "snapshot") {
+        void refreshSessionDetailInBackground(sessionId);
       }
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : bridgeOfflineMessage);
+      setIsActiveSessionLoading(false);
     }
-  }
+  }, [bridgeOfflineMessage, loadSessionDetail, refreshSessionDetailInBackground, startSessionSwitchTransition]);
 
-  function handlePrefetchSession(sessionId: string) {
+  const handlePrefetchSession = useCallback((sessionId: string) => {
     if (sessionCacheRef.current.has(sessionId) || pendingSessionRequestsRef.current.has(sessionId)) {
       return;
     }
 
     void loadSessionDetail(sessionId);
-  }
+  }, [loadSessionDetail]);
 
   async function handleSelectFileTreeNode(node: VisibleFileTreeNode) {
+    setIsSidePanelCollapsed(false);
+    setSidePanelMode("files");
+
     if (node.kind === "folder") {
       setCollapsedFolders((current) => {
         const next = new Set(current);
@@ -260,10 +585,11 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     }
   }
 
-  async function handleOpenLinkedFile(filePath: string) {
+  const handleOpenLinkedFile = useCallback(async (filePath: string) => {
     try {
       setError(null);
-      setIsFilesPanelCollapsed(false);
+      setIsSidePanelCollapsed(false);
+      setSidePanelMode("files");
       expandFileAncestors(filePath, setCollapsedFolders);
       setIsPreviewLoading(true);
       const response = await getFilePreview(filePath);
@@ -273,9 +599,9 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     } finally {
       setIsPreviewLoading(false);
     }
-  }
+  }, [bridgeOfflineMessage]);
 
-  function handleMarkdownLinkClick(event: MouseEvent<HTMLElement>) {
+  const handleMarkdownLinkClick = useCallback((event: MouseEvent<HTMLElement>) => {
     const link = (event.target as HTMLElement | null)?.closest("a[data-file-link='true']");
     if (!link) {
       return;
@@ -288,7 +614,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     }
 
     void handleOpenLinkedFile(filePath);
-  }
+  }, [handleOpenLinkedFile]);
 
   async function handleOpenNodeInFinder(node: VisibleFileTreeNode) {
     try {
@@ -523,9 +849,34 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
     });
   }
 
+  function handleResizeStart(handle: WorkspaceResizeHandle, event: ReactPointerEvent<HTMLButtonElement>) {
+    const shellWidth = shellRef.current?.clientWidth ?? 0;
+    const leftWidth = leftPanelRef.current?.clientWidth ?? 0;
+    const rightWidth = rightPanelRef.current?.clientWidth ?? 0;
+    const sidepanelBodyWidth = sidepanelFilesBodyRef.current?.clientWidth ?? rightWidth;
+    const sidepanelPrimaryWidth = layoutWidths.sidepanelPrimary ?? Math.round(sidepanelBodyWidth / 2);
+
+    dragStateRef.current = {
+      handle,
+      shellWidth,
+      sidepanelBodyWidth,
+      startLeft: layoutWidths.left ?? leftWidth,
+      startRight: layoutWidths.right ?? rightWidth,
+      startSidepanelPrimary: sidepanelPrimaryWidth,
+      startX: event.clientX,
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+
   return (
-    <section className={`shell workspace-shell ${isFilesPanelCollapsed ? "workspace-shell-files-collapsed" : ""}`}>
-      <aside className="panel panel-left" ref={leftPanelRef}>
+    <section
+      className={`shell workspace-shell ${isSidePanelCollapsed ? "workspace-shell-sidepanel-collapsed" : ""}`}
+      ref={shellRef}
+      style={workspaceShellStyle}
+    >
+      <aside className="panel panel-left workspace-panel-left" ref={leftPanelRef}>
         <section className="section-group section-group-form">
           <button className="workspace-open-button workspace-open-button-standalone" onClick={() => void handleOpenWorkspace()} type="button">
             {messages.workspace.openWorkspace}
@@ -561,9 +912,10 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
                 </div>
               </div>
               <div className="session-list">
-                {sessions
-                  .filter((session) => session.workspaceId === workspace.id)
-                  .map((session) => (
+                {isSessionsLoading ? (
+                  <div className="workspace-empty workspace-empty-compact">{messages.workspace.loading}</div>
+                ) : null}
+                {(sessionsByWorkspace.get(workspace.id) ?? []).map((session) => (
                     <article
                       className={`session-item ${activeSessionId === session.id ? "session-item-active" : ""}`}
                       key={session.id}
@@ -582,13 +934,20 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
                       </div>
                     </article>
                   ))}
-                {sessions.filter((session) => session.workspaceId === workspace.id).length === 0 ? (
+                {!isSessionsLoading && (sessionsByWorkspace.get(workspace.id) ?? []).length === 0 ? (
                   <div className="workspace-empty workspace-empty-compact">{messages.workspace.noSession}</div>
                 ) : null}
               </div>
             </section>
           ))
         )}
+
+        <button
+          aria-label="Resize left panel"
+          className="workspace-resizer workspace-resizer-left"
+          onPointerDown={(event) => handleResizeStart("left", event)}
+          type="button"
+        />
       </aside>
 
       <section className="panel panel-center workspace-center">
@@ -601,25 +960,21 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
 
         <div className="workspace-log workspace-timeline" ref={timelineRef}>
           {error ? <div className="workspace-empty">{error}</div> : null}
+          {!error && isSwitchingSession ? <div className="workspace-empty">{messages.workspace.loading}</div> : null}
+          {!error && isActiveSessionLoading && !isSwitchingSession ? (
+            <div className="workspace-empty">{messages.workspace.loading}</div>
+          ) : null}
           {!error && activeSession?.messages.length === 0 ? (
             <div className="workspace-empty">{messages.workspace.noMessages}</div>
           ) : null}
           {activeSession?.messages.map((item, index, items) => (
-            <article
-              className={`workspace-log-item workspace-log-item-${item.role}`}
+            <TimelineMessage
+              isCurrent={index === items.length - 1}
               key={item.id}
+              message={item}
+              onLinkClick={handleMarkdownLinkClick}
               ref={index === items.length - 1 ? currentMessageRef : null}
-            >
-              <div className="workspace-log-top">
-                <span className="workspace-log-label">{item.role}</span>
-                <span className="workspace-log-detail">{formatMessageTime(item.createdAt)}</span>
-              </div>
-              <div
-                className="workspace-log-content"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(item.content) }}
-                onClick={handleMarkdownLinkClick}
-              />
-            </article>
+            />
           ))}
         </div>
 
@@ -642,92 +997,245 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
         </div>
       </section>
 
-      {isFilesPanelCollapsed ? (
+      {isSidePanelCollapsed ? (
         <button
-          className="workspace-files-rail"
-          onClick={() => setIsFilesPanelCollapsed(false)}
+          className="workspace-sidepanel-rail"
+          onClick={() => setIsSidePanelCollapsed(false)}
           type="button"
         >
-          <span className="workspace-files-rail-arrow" aria-hidden="true">‹</span>
-          <span className="workspace-files-rail-label">{messages.workspace.filesTitle}</span>
+          <span className="workspace-sidepanel-rail-arrow" aria-hidden="true">‹</span>
+          <span className="workspace-sidepanel-rail-label">{messages.workspace.contextTitle}</span>
         </button>
       ) : (
-        <aside className="panel panel-right workspace-files-panel">
-          <div className="panel-head workspace-files-panel-head">
-            <span className="eyebrow">{messages.workspace.filesTitle}</span>
+        <aside className="panel panel-right workspace-sidepanel" ref={rightPanelRef}>
+          <button
+            aria-label="Resize right panel"
+            className="workspace-resizer workspace-resizer-right"
+            onPointerDown={(event) => handleResizeStart("right", event)}
+            type="button"
+          />
+          <div className="panel-head workspace-sidepanel-head">
+            <div className="workspace-sidepanel-head-meta">
+              <span className="eyebrow">{messages.workspace.contextTitle}</span>
+              <span className="workspace-sidepanel-head-detail">
+                {getSidePanelModeLabel(sidePanelMode, messages)}
+              </span>
+            </div>
             <button
-              className="workspace-files-panel-toggle"
-              onClick={() => setIsFilesPanelCollapsed(true)}
+              className="workspace-sidepanel-toggle"
+              onClick={() => setIsSidePanelCollapsed(true)}
               type="button"
             >
-              collapse
+              {messages.workspace.collapse}
             </button>
           </div>
 
-          <div className="file-tree">
-            {buildVisibleFileTree(fileTree, collapsedFolders).map((node) => (
-              <div
-                className={`file-row ${node.kind === "folder" ? "file-row-folder" : "file-row-file"} ${preview?.path === node.path ? "file-row-active" : ""}`}
-                key={node.id}
+          <div className="workspace-sidepanel-tabs" role="tablist" aria-label={messages.workspace.sidePanelAriaLabel}>
+            {(["summary", "files", "actions"] as WorkspaceSidePanelMode[]).map((mode) => (
+              <button
+                aria-selected={sidePanelMode === mode}
+                className={`workspace-sidepanel-tab ${sidePanelMode === mode ? "workspace-sidepanel-tab-active" : ""}`}
+                key={mode}
+                onClick={() => setSidePanelMode(mode)}
+                role="tab"
+                type="button"
               >
-                <button
-                  className="file-row-main"
-                  onClick={() => void handleSelectFileTreeNode(node)}
-                  type="button"
-                >
-                  <span className="file-row-label" style={{ paddingLeft: `${8 + node.depth * 14}px` }}>
-                    {node.kind === "folder" ? (
-                      <>
-                        <span className="file-row-chevron" aria-hidden="true">{node.isExpanded ? "▾" : "▸"}</span>
-                        <span className="file-row-icon file-row-icon-folder" aria-hidden="true">□</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="file-row-chevron file-row-chevron-spacer" aria-hidden="true"> </span>
-                        <span className="file-row-icon file-row-icon-file" aria-hidden="true">·</span>
-                      </>
-                    )}
-                    {node.name}
-                  </span>
-                </button>
-                <span className="file-row-actions">
-                  <button
-                    className="file-row-action"
-                    onClick={() => void handleOpenNodeInFinder(node)}
-                    type="button"
-                  >
-                    finder
-                  </button>
-                </span>
-              </div>
+                {getSidePanelModeLabel(mode, messages)}
+              </button>
             ))}
           </div>
 
-          <aside className={`file-preview-drawer ${preview ? "file-preview-drawer-open" : ""}`}>
-            <div className="file-preview-head">
-              <div className="file-preview-meta">
-                <span className="eyebrow">{preview?.name ?? "preview"}</span>
+          {sidePanelMode === "files" ? (
+            <div
+              className="workspace-sidepanel-body workspace-sidepanel-body-files"
+              ref={sidepanelFilesBodyRef}
+              style={sidepanelFilesBodyStyle}
+            >
+              <div className="workspace-files-column">
+                <div className="workspace-sidepanel-subhead">
+                  <span className="eyebrow">{messages.workspace.filesTitle}</span>
+                  <span className="workspace-sidepanel-subhead-detail">
+                    {visibleFileTree.length} {messages.workspace.fileTreeNodes}
+                  </span>
+                </div>
+                <div className="file-tree">
+                  {visibleFileTree.map((node) => (
+                    <div
+                      className={`file-row ${node.kind === "folder" ? "file-row-folder" : "file-row-file"} ${preview?.path === node.path ? "file-row-active" : ""}`}
+                      key={node.id}
+                    >
+                      <button
+                        className="file-row-main"
+                        onClick={() => void handleSelectFileTreeNode(node)}
+                        type="button"
+                      >
+                        <span className="file-row-label" style={{ paddingLeft: `${8 + node.depth * 14}px` }}>
+                          {node.kind === "folder" ? (
+                            <>
+                              <span className="file-row-chevron" aria-hidden="true">{node.isExpanded ? "▾" : "▸"}</span>
+                              <span className="file-row-icon file-row-icon-folder" aria-hidden="true">□</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="file-row-chevron file-row-chevron-spacer" aria-hidden="true"> </span>
+                              <span className="file-row-icon file-row-icon-file" aria-hidden="true">·</span>
+                            </>
+                          )}
+                          {node.name}
+                        </span>
+                      </button>
+                      <span className="file-row-actions">
+                        <button
+                          className="file-row-action"
+                          onClick={() => void handleOpenNodeInFinder(node)}
+                          type="button"
+                        >
+                          {messages.workspace.openInFinder}
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <button className="file-preview-close" onClick={() => setPreview(null)} type="button">
-                close
-              </button>
-            </div>
 
-            <div className="file-preview-body">
-              {isPreviewLoading ? <div className="workspace-empty">loading preview...</div> : null}
-              {!isPreviewLoading && preview ? (
-                preview.extension === ".md" ? (
-                  <div
-                    className="file-preview-markdown"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(preview.content) }}
-                    onClick={handleMarkdownLinkClick}
-                  />
-                ) : (
-                  <pre className="file-preview-pre">{preview.content}</pre>
-                )
-              ) : null}
+              <button
+                aria-label="Resize files panel"
+                className="workspace-sidepanel-resizer"
+                onPointerDown={(event) => handleResizeStart("sidepanel", event)}
+                type="button"
+              />
+
+              <div className="workspace-preview-column">
+                <div className="workspace-sidepanel-subhead">
+                  <span className="eyebrow">{preview?.name ?? messages.workspace.previewTitle}</span>
+                  {preview ? (
+                    <button className="workspace-preview-close" onClick={() => setPreview(null)} type="button">
+                      {messages.workspace.clearPreview}
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="workspace-preview-body">
+                  {isPreviewLoading ? <div className="workspace-empty">{messages.workspace.loadingPreview}</div> : null}
+                  {!isPreviewLoading && preview ? (
+                    preview.extension === ".md" ? (
+                      <div
+                        className="file-preview-markdown"
+                        dangerouslySetInnerHTML={{ __html: previewHtml ?? "" }}
+                        onClick={handleMarkdownLinkClick}
+                      />
+                    ) : (
+                      <pre className="file-preview-pre">{preview.content}</pre>
+                    )
+                  ) : null}
+                  {!isPreviewLoading && !preview ? (
+                    <div className="workspace-sidepanel-empty">
+                      <p>{messages.workspace.pickPreviewHint}</p>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
-          </aside>
+          ) : null}
+
+          {sidePanelMode === "summary" ? (
+            <div className="workspace-sidepanel-body workspace-sidepanel-scroll">
+              <section className="workspace-sidepanel-section">
+                <div className="workspace-sidepanel-subhead">
+                  <span className="eyebrow">{messages.workspace.sessionLabel}</span>
+                  <span className="workspace-sidepanel-subhead-detail">
+                    {activeSession ? `${activeSession.turnCount} ${messages.workspace.turnsSuffix}` : messages.workspace.noSession}
+                  </span>
+                </div>
+                {activeSession ? (
+                  <div className="workspace-summary-card">
+                    <h3>{activeSession.title}</h3>
+                    <p>{messages.workspace.latestUpdate} {formatMessageTime(activeSession.updatedAt)}</p>
+                  </div>
+                ) : (
+                  <div className="workspace-sidepanel-empty">
+                    <p>{messages.workspace.noActiveSession}</p>
+                  </div>
+                )}
+              </section>
+
+              <section className="workspace-sidepanel-section">
+                <div className="workspace-sidepanel-subhead">
+                  <span className="eyebrow">{messages.workspace.linkedFiles}</span>
+                  <span className="workspace-sidepanel-subhead-detail">{linkedFiles.length}</span>
+                </div>
+                {linkedFiles.length > 0 ? (
+                  <div className="workspace-summary-list">
+                    {linkedFiles.map((filePath) => (
+                      <button
+                        className="workspace-summary-link"
+                        key={filePath}
+                        onClick={() => void handleOpenLinkedFile(filePath)}
+                        type="button"
+                      >
+                        {filePath}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="workspace-sidepanel-empty">
+                    <p>{messages.workspace.noLinkedFiles}</p>
+                  </div>
+                )}
+              </section>
+
+              <section className="workspace-sidepanel-section">
+                <div className="workspace-sidepanel-subhead">
+                  <span className="eyebrow">{messages.workspace.timelineLabel}</span>
+                  <span className="workspace-sidepanel-subhead-detail">{timelineSummaryItems.length}</span>
+                </div>
+                {timelineSummaryItems.length > 0 ? (
+                  <div className="workspace-summary-timeline">
+                    {timelineSummaryItems.map((item) => (
+                      <article className="workspace-summary-timeline-item" key={item.id}>
+                        <div className="workspace-summary-timeline-top">
+                          <span>{getMessageRoleLabel(item.role, messages)}</span>
+                          <span>{item.time}</span>
+                        </div>
+                        <p>{item.content}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="workspace-sidepanel-empty">
+                    <p>{messages.workspace.noTimeline}</p>
+                  </div>
+                )}
+              </section>
+            </div>
+          ) : null}
+
+          {sidePanelMode === "actions" ? (
+            <div className="workspace-sidepanel-body workspace-sidepanel-scroll">
+              <section className="workspace-sidepanel-section">
+                <div className="workspace-sidepanel-subhead">
+                  <span className="eyebrow">{messages.workspace.quickActions}</span>
+                  <span className="workspace-sidepanel-subhead-detail">{actionPrompts.length}</span>
+                </div>
+                <div className="workspace-actions-list">
+                  {actionPrompts.map((item) => (
+                    <button
+                      className="workspace-action-card"
+                      key={item.title}
+                      onClick={() => {
+                        setComposerValue(item.prompt);
+                        setSidePanelMode("summary");
+                      }}
+                      type="button"
+                    >
+                      <strong>{item.title}</strong>
+                      <p>{item.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          ) : null}
         </aside>
       )}
 
@@ -770,7 +1278,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
               onClick={() => handleOpenRenameDialog(sessionContextMenu.session)}
               type="button"
             >
-              rename
+              {messages.workspace.rename}
             </button>
             <button
               className="context-menu-item"
@@ -792,7 +1300,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
             role="dialog"
           >
             <div className="confirm-dialog-head">
-              <span className="eyebrow">rename session</span>
+              <span className="eyebrow">{messages.workspace.renameSession}</span>
             </div>
             <input
               autoFocus
@@ -821,7 +1329,7 @@ export function WorkspaceClient({ language }: WorkspaceClientProps) {
                 {messages.common.cancel}
               </button>
               <button className="confirm-dialog-button" disabled={isRenaming || !renameValue.trim()} onClick={() => void handleRenameSession()} type="button">
-                {isRenaming ? messages.workspace.loading : "rename"}
+                {isRenaming ? messages.workspace.loading : messages.workspace.rename}
               </button>
             </div>
           </div>
@@ -855,6 +1363,32 @@ function createOptimisticMessage(
 function createClientMessageId(role: Message["role"]) {
   return `client-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+const TimelineMessage = memo(
+  forwardRef<HTMLElement, TimelineMessageProps>(function TimelineMessage({ isCurrent, message, onLinkClick }, ref) {
+    const html = useMemo(() => renderMarkdown(message.content), [message.content]);
+
+    return (
+      <article className={`workspace-log-item workspace-log-item-${message.role}`} ref={isCurrent ? ref : null}>
+        <div className="workspace-log-top">
+          <span className="workspace-log-label">{message.role}</span>
+          <span className="workspace-log-detail">{formatMessageTime(message.createdAt)}</span>
+        </div>
+        <div className="workspace-log-content" dangerouslySetInnerHTML={{ __html: html }} onClick={onLinkClick} />
+      </article>
+    );
+  }),
+  (previous, next) =>
+    previous.isCurrent === next.isCurrent &&
+    previous.message === next.message &&
+    previous.onLinkClick === next.onLinkClick,
+);
+
+type TimelineMessageProps = {
+  isCurrent: boolean;
+  message: Message;
+  onLinkClick: (event: MouseEvent<HTMLElement>) => void;
+};
 
 function cacheSessionDetail(cache: Map<string, Session>, session: Session) {
   cache.set(session.id, session);
@@ -1024,75 +1558,6 @@ function expandFileAncestors(filePath: string, setCollapsedFolders: Dispatch<Set
   });
 }
 
-function renderMarkdown(markdown: string) {
-  const escaped = escapeHtml(markdown);
-  const codeBlocks: string[] = [];
-
-  let html = escaped.replace(/```([\s\S]*?)```/g, (_match, code) => {
-    const token = `__CODE_BLOCK_${codeBlocks.length}__`;
-    codeBlocks.push(`<pre><code>${code.trim()}</code></pre>`);
-    return token;
-  });
-
-  html = html.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    (_match, label, href) =>
-      `<a class="thread-link" data-file-link="true" data-file-path="${escapeHtmlAttribute(normalizeLinkedFilePath(href))}" href="${escapeHtmlAttribute(href)}">${label}</a>`,
-  );
-  html = html.replace(/^### (.*)$/gm, "<h3>$1</h3>");
-  html = html.replace(/^## (.*)$/gm, "<h2>$1</h2>");
-  html = html.replace(/^# (.*)$/gm, "<h1>$1</h1>");
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/^(?:-|\*) (.*)$/gm, "<li>$1</li>");
-  html = html.replace(/^\d+\. (.*)$/gm, "<li data-ordered=\"true\">$1</li>");
-
-  const blocks = html.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
-  html = blocks
-    .map((block) => {
-      if (block.startsWith("__CODE_BLOCK_")) {
-        return block;
-      }
-
-      if (block.startsWith("<h1>") || block.startsWith("<h2>") || block.startsWith("<h3>")) {
-        return block;
-      }
-
-      if (block.includes("<li")) {
-        const isOrdered = block.includes('data-ordered="true"');
-        const normalizedList = block.replace(/ data-ordered="true"/g, "");
-        return isOrdered ? `<ol>${normalizedList}</ol>` : `<ul>${normalizedList}</ul>`;
-      }
-
-      return `<p>${block.replace(/\n/g, "<br />")}</p>`;
-    })
-    .join("");
-
-  codeBlocks.forEach((codeBlock, index) => {
-    html = html.replace(`__CODE_BLOCK_${index}__`, codeBlock);
-  });
-
-  return html;
-}
-
-function normalizeLinkedFilePath(rawHref: string) {
-  return rawHref.replace(/#L\d+(C\d+)?$/i, "").replace(/:\d+(?::\d+)?$/i, "");
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function escapeHtmlAttribute(value: string) {
-  return escapeHtml(value);
-}
-
 function truncateSessionTitle(value: string, maxLength = 10) {
   const characters = Array.from(value);
 
@@ -1101,4 +1566,211 @@ function truncateSessionTitle(value: string, maxLength = 10) {
   }
 
   return `${characters.slice(0, maxLength).join("")}...`;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (max < min) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
+}
+
+function parseCssPixelValue(rawValue: string) {
+  const normalized = rawValue.trim();
+
+  if (!normalized.endsWith("px")) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(normalized.replace("px", ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readWorkspaceLayout() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<Record<keyof WorkspaceLayoutWidths, number>>;
+    return {
+      left: typeof parsed.left === "number" ? parsed.left : null,
+      right: typeof parsed.right === "number" ? parsed.right : null,
+      sidepanelPrimary: typeof parsed.sidepanelPrimary === "number" ? parsed.sidepanelPrimary : null,
+    } satisfies WorkspaceLayoutWidths;
+  } catch {
+    return null;
+  }
+}
+
+function writeWorkspaceLayout(layoutWidths: WorkspaceLayoutWidths) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify(layoutWidths));
+  } catch {}
+}
+
+function clampWorkspaceLayout(
+  layoutWidths: WorkspaceLayoutWidths,
+  shellWidth: number,
+  sidepanelBodyWidth: number,
+): WorkspaceLayoutWidths {
+  const left = layoutWidths.left
+    ? clampNumber(layoutWidths.left, WORKSPACE_LEFT_MIN_WIDTH, shellWidth - (layoutWidths.right ?? WORKSPACE_RIGHT_MIN_WIDTH) - WORKSPACE_CENTER_MIN_WIDTH)
+    : null;
+  const right = layoutWidths.right
+    ? clampNumber(layoutWidths.right, WORKSPACE_RIGHT_MIN_WIDTH, shellWidth - (left ?? WORKSPACE_LEFT_MIN_WIDTH) - WORKSPACE_CENTER_MIN_WIDTH)
+    : null;
+  const sidepanelPrimary = layoutWidths.sidepanelPrimary
+    ? sidepanelBodyWidth > 0
+      ? clampNumber(
+          layoutWidths.sidepanelPrimary,
+          WORKSPACE_SIDEPANEL_PRIMARY_MIN_WIDTH,
+          Math.max(
+            WORKSPACE_SIDEPANEL_PRIMARY_MIN_WIDTH,
+            sidepanelBodyWidth - WORKSPACE_RESIZER_WIDTH - WORKSPACE_SIDEPANEL_SECONDARY_MIN_WIDTH,
+          ),
+        )
+      : layoutWidths.sidepanelPrimary
+    : null;
+
+  return {
+    left,
+    right,
+    sidepanelPrimary,
+  };
+}
+
+function collectSessionLinkedFiles(messages: Message[]) {
+  const filePaths = new Set<string>();
+
+  for (const message of messages) {
+    for (const filePath of extractFilePathsFromContent(message.content)) {
+      filePaths.add(filePath);
+    }
+  }
+
+  return [...filePaths];
+}
+
+function extractFilePathsFromContent(content: string) {
+  const filePaths = new Set<string>();
+  const markdownLinkPattern = /\[[^\]]+\]\((\/[^)\s]+)\)/g;
+  const dataLinkPattern = /data-file-path="(\/[^"]+)"/g;
+
+  for (const match of content.matchAll(markdownLinkPattern)) {
+    if (match[1]) {
+      filePaths.add(match[1]);
+    }
+  }
+
+  for (const match of content.matchAll(dataLinkPattern)) {
+    if (match[1]) {
+      filePaths.add(match[1]);
+    }
+  }
+
+  return [...filePaths];
+}
+
+function createTimelineSummaryItems(session: Session | null) {
+  if (!session) {
+    return [];
+  }
+
+  return session.messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    time: formatMessageTime(message.createdAt),
+    content: summarizeMessageContent(message.content),
+  }));
+}
+
+function summarizeMessageContent(content: string, maxLength = 120) {
+  const compact = content.replace(/\s+/g, " ").trim();
+
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+
+  return `${compact.slice(0, maxLength).trimEnd()}...`;
+}
+
+function createWorkspaceActionPrompts(session: Session | null, linkedFiles: string[], language: AppLanguage) {
+  const isZh = language === "zh";
+  const referencedFiles = linkedFiles.length > 0
+    ? isZh
+      ? `涉及文件包括：${linkedFiles.join("、")}。`
+      : `Referenced files include: ${linkedFiles.join(", ")}.`
+    : "";
+  const sessionTitle = session?.title
+    ? isZh
+      ? `当前 session 标题：${session.title}。`
+      : `Current session title: ${session.title}.`
+    : "";
+
+  return [
+    {
+      title: isZh ? "时间线摘要" : "timeline summary",
+      description: isZh
+        ? "按时间线梳理对话摘要，保留必要细节和具体文件。"
+        : "Summarize the conversation as a timeline with concrete details and files.",
+      prompt: isZh
+        ? `请按照时间线梳理这个 session 的对话摘要，保留必要细节，涉及具体文件时要写清楚。${sessionTitle}${referencedFiles}`.trim()
+        : `Please summarize this session as a timeline, keeping the necessary details and naming specific files when relevant. ${sessionTitle}${referencedFiles}`.trim(),
+    },
+    {
+      title: isZh ? "用户决策" : "user decisions",
+      description: isZh
+        ? "提取用户明确做出的决策和理由；若理由没明说就不要补。"
+        : "Extract explicit user decisions and reasons without inventing missing rationale.",
+      prompt: isZh
+        ? `请提取这个 session 中用户明确做出的决策和理由。只有用户自己明确说出的理由才能保留；如果没说，就不要补。${sessionTitle}`.trim()
+        : `Please extract the explicit decisions the user made in this session and the reasons they stated. Keep only reasons the user clearly said; if none were stated, do not invent them. ${sessionTitle}`.trim(),
+    },
+    {
+      title: isZh ? "关注点地图" : "focus map",
+      description: isZh
+        ? "识别用户在过程中真正关注什么、不关注什么。"
+        : "Identify what the user truly cared about and what they did not.",
+      prompt: isZh
+        ? `请总结这个 session 里用户真正关注什么、不关注什么，并用简洁列表说明。${sessionTitle}`.trim()
+        : `Please summarize what the user truly cared about in this session, and what they did not care about, using a concise list. ${sessionTitle}`.trim(),
+    },
+  ];
+}
+
+function getSidePanelModeLabel(mode: WorkspaceSidePanelMode, messages: ReturnType<typeof getMessages>) {
+  if (mode === "files") {
+    return messages.workspace.filesTitle;
+  }
+
+  if (mode === "summary") {
+    return messages.workspace.summaryTab;
+  }
+
+  return messages.workspace.actionsTab;
+}
+
+function getMessageRoleLabel(role: Message["role"], messages: ReturnType<typeof getMessages>) {
+  const isZh = messages.nav.workspace === "工作区";
+
+  if (role === "user") {
+    return isZh ? "用户" : "user";
+  }
+
+  if (role === "assistant") {
+    return isZh ? "助手" : "assistant";
+  }
+
+  return role === "system" ? (isZh ? "系统" : "system") : role;
 }

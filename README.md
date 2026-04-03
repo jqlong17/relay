@@ -1,92 +1,173 @@
 # Relay
 
-Relay is a web workspace for running your local AI agent from anywhere.
+Relay is a web workspace for driving a local Codex runtime from a browser.
 
-## Overview
+It keeps the local workspace as the execution boundary while exposing sessions, files, and runtime activity through a web UI that can be resumed across devices.
 
-Relay connects a local agent runtime with a browser-based workspace so work can continue across devices. Instead of treating the terminal as the product, Relay turns local agent capabilities into a clearer interface for conversations, execution flows, files, and changes.
+## What Relay Is
 
-The goal is to make local agent workflows feel continuous, inspectable, and easy to resume, whether you are at your desk or checking in from another device.
+Relay is not a hosted agent runtime and not just a browser terminal.
 
-## Hero
+It is a thin web layer on top of:
 
-**Your local agent, anywhere.**
+- a local bridge service that can see the active workspace
+- the Codex app server that owns threads and turns
+- a browser UI for workspace switching, session continuity, file inspection, and streaming runs
 
-Relay turns your local workspace into a web-native agent desk, so you can chat, inspect files, review changes, and keep work moving across devices.
+The product shape is intentionally simple:
 
-## Why Relay
+- `workspace`: open a local folder, browse files, inspect previews, continue the active thread
+- `sessions`: review, rename, archive, and resume Codex-backed sessions
+- `memories`: a product surface for durable memory workflows
+- `readme`: explicit project context and onboarding
 
-The name `Relay` reflects the core product idea:
+## Current Scope
 
-- It is a bridge between your local machine and the web.
-- It lets you hand work back and forth between yourself and the agent.
-- It preserves continuity, so tasks can be resumed instead of restarted.
+The repository already supports the core local loop:
 
-Relay is not just a web terminal. It is a workspace for staying connected to an agent that keeps moving with your work.
+- open a local workspace from the web UI
+- list workspaces and remember the preferred session per workspace
+- list Codex threads for the active workspace
+- create draft sessions before the first runtime turn
+- rename and archive sessions
+- stream runtime output from Codex into the web client
+- inspect the active workspace file tree and preview file contents
+- use a dedicated mobile route for lightweight remote continuation
 
-## Product Direction
+Some surfaces are more product-shaped than fully wired yet. In particular, the `memories` page currently represents the intended UX and information architecture more than a completed backend feature.
 
-Relay is designed as a three-pane workspace:
+## Architecture
 
-- Left: sessions and task history
-- Center: conversation and execution timeline
-- Right: file tree, file preview, and changes
+Relay is a small monorepo with three main layers:
 
-The initial focus is AI-assisted work on a local workspace, with coding as the first strong use case but not the only one.
+### 1. Web App
 
-## V1 Principles
+[`apps/web`](/Users/ruska/project/web-cli/apps/web) is a Next.js app that renders the desktop and mobile workspace UI.
 
-- Web-first experience
-- Local workspace as the source of truth
-- Natural language first, commands supported
-- Smooth typing, streaming, and state transitions
-- Clear visibility into files, edits, and task progress
+Key responsibilities:
+
+- top-level navigation and page shells
+- workspace, session, and mobile clients
+- calling the local bridge from server and client components
+- rendering file previews and runtime message streams
+
+### 2. Local Bridge
+
+[`services/local-bridge`](/Users/ruska/project/web-cli/services/local-bridge) is a Node HTTP service that translates the web UI into local operations.
+
+Key responsibilities:
+
+- workspace open/list/remove flows
+- active workspace state
+- file tree and file content access inside the active workspace boundary
+- session creation, rename, archive, and selection
+- starting and streaming Codex turns
+
+Important routes:
+
+- `GET /health`
+- `GET /workspaces`
+- `POST /workspaces/open`
+- `POST /workspaces/open-picker`
+- `GET /sessions`
+- `GET /sessions/:id`
+- `POST /sessions`
+- `POST /sessions/:id/select`
+- `POST /sessions/:id/rename`
+- `POST /sessions/:id/archive`
+- `GET /files/tree`
+- `GET /files/content?path=...`
+- `POST /runtime/run?stream=1`
+
+### 3. Shared Types
+
+[`packages/shared-types`](/Users/ruska/project/web-cli/packages/shared-types) contains the contracts shared by the web app and the bridge.
+
+## How Runtime Integration Works
+
+Relay does not implement its own agent engine.
+
+The bridge starts and talks to `codex app-server --listen stdio://`, then maps Codex thread and turn notifications into Relay runtime events for the browser.
+
+That means Relay currently assumes:
+
+- `codex` is installed and available on `PATH`
+- the local machine is the execution environment
+- the browser UI is a control and inspection surface, not the source of workspace truth
 
 ## Development
 
-Relay provides a root startup script for local development:
+### Prerequisites
+
+- Node.js 20+
+- `pnpm`
+- `pm2`
+- `codex` available on `PATH`
+
+Install dependencies:
+
+```bash
+pnpm install
+```
+
+Start both services:
 
 ```bash
 pnpm dev:up
 ```
 
-This runs [`dev-up.sh`](/Users/ruska/project/web-cli/dev-up.sh), which:
+This runs [`dev-up.sh`](/Users/ruska/project/web-cli/dev-up.sh), which starts:
 
-- starts `services/local-bridge`
-- starts `apps/web`
-- checks the bridge health endpoint at `http://127.0.0.1:4242/health`
-- checks the web app at `http://127.0.0.1:3000`
+- `relay-bridge` on `http://127.0.0.1:4242`
+- `relay-web` on `http://127.0.0.1:3000`
 
-You can also run the script directly:
-
-```bash
-bash ./dev-up.sh
-```
-
-To stop both services:
+Stop both services:
 
 ```bash
 pnpm dev:down
 ```
 
-Or run the stop script directly:
+Useful `pm2` commands:
 
 ```bash
-bash ./dev-down.sh
+pm2 ls
+pm2 logs relay-web
+pm2 logs relay-bridge
+pm2 restart relay-web relay-bridge
+pm2 stop relay-web relay-bridge
 ```
 
-After startup:
+Process definitions live in [`ecosystem.config.cjs`](/Users/ruska/project/web-cli/ecosystem.config.cjs).
 
-- Relay web: `http://127.0.0.1:3000`
-- Local bridge health: `http://127.0.0.1:4242/health`
+## Repository Layout
 
-Logs and process ids are written to:
+```text
+.
+├── apps/
+│   └── web/
+├── packages/
+│   └── shared-types/
+├── services/
+│   └── local-bridge/
+├── dev-up.sh
+├── dev-down.sh
+└── ecosystem.config.cjs
+```
 
-- `.relay-dev/web.log`
-- `.relay-dev/local-bridge.log`
-- `.relay-dev/web.pid`
-- `.relay-dev/local-bridge.pid`
+## Product Direction
 
-## Long-Term Vision
+Relay is aiming for a calm, inspectable agent workspace rather than a terminal clone.
 
-Relay should let a user start work on their computer and continue it from any browser, including mobile, without losing context. The agent stays close to the local workspace, while the interface stays accessible from anywhere.
+The product direction is:
+
+- keep the local workspace as the execution truth
+- make sessions resumable and readable from anywhere
+- expose files and changes as first-class context
+- support both desktop and mobile continuation
+- leave room for durable memory and project-context layers
+
+## Documentation Rule
+
+This file is the primary README for the repository and should remain the single source of truth for project-level documentation.
+
+If another surface needs README content, it should reference or render this file rather than maintain a second copy.

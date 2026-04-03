@@ -1,6 +1,8 @@
 type MobileHeaderProps = {
   brand: string;
+  sessionName: string;
   workspaceName: string;
+  statusDetail: string;
   statusLabel: string;
   sessionsLabel: string;
   workspacesLabel: string;
@@ -12,7 +14,9 @@ type MobileHeaderProps = {
 
 export function MobileHeader({
   brand,
+  sessionName,
   workspaceName,
+  statusDetail,
   statusLabel,
   sessionsLabel,
   workspacesLabel,
@@ -47,7 +51,14 @@ export function MobileHeader({
           </button>
         </div>
       </div>
-      <div className="mobile-header-meta">{workspaceName}</div>
+      <div className="mobile-header-meta">
+        <span className="mobile-header-workspace">{workspaceName}</span>
+        <span className="mobile-header-separator" aria-hidden="true">
+          /
+        </span>
+        <span className="mobile-header-session">{sessionName}</span>
+      </div>
+      <div className="mobile-header-status-detail">{statusDetail}</div>
     </header>
   );
 }

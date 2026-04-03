@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import type { RuntimeEvent } from "@relay/shared-types";
+import type { Message, RuntimeEvent } from "@relay/shared-types";
 
 import { readJsonBody } from "./json-body";
 import { CodexAppServerService, type AppServerNotification } from "../services/codex-app-server";
@@ -55,11 +55,13 @@ async function handleRuntimeRoute(
       });
 
       await writeRuntimeEventStream(response, stream);
+      await syncSessionSnapshot(codexAppServerService, workspaceStore, sessionId);
       response.end();
       return true;
     }
 
     const events = await collectRuntimeEvents(stream);
+    await syncSessionSnapshot(codexAppServerService, workspaceStore, sessionId);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ sessionId, events }));
     return true;
@@ -93,6 +95,95 @@ async function writeRuntimeEventStream(
 }
 
 export { handleRuntimeRoute };
+
+async function syncSessionSnapshot(
+  codexAppServerService: CodexAppServerService,
+  workspaceStore: WorkspaceStore,
+  sessionId: string,
+) {
+  try {
+    const thread = await codexAppServerService.threadRead(sessionId, true);
+    const workspaceId = workspaceStore.findByLocalPath(thread.cwd)?.id ?? null;
+
+    if (!workspaceId) {
+      return;
+    }
+
+    workspaceStore.saveSessionDetailSnapshot(mapThreadToSessionDetail(thread, workspaceId));
+    workspaceStore.clearSessionListSnapshot(workspaceId);
+  } catch {
+    // Ignore snapshot sync failures after runs.
+  }
+}
+
+function mapThreadToSessionDetail(
+  thread: {
+    id: string;
+    preview: string;
+    createdAt: number;
+    updatedAt: number;
+    turns: Array<{
+      status: "inProgress" | "completed" | "interrupted" | "failed";
+      items: Array<
+        | { type: "userMessage"; id: string; content: Array<{ type: "text"; text: string }> }
+        | { type: "agentMessage"; id: string; text: string }
+        | { type: string; id: string }
+      >;
+    }>;
+  },
+  workspaceId: string,
+) {
+  const messages: Message[] = [];
+  const baseMs = thread.createdAt * 1000;
+
+  thread.turns.forEach((turn, turnIndex) => {
+    turn.items.forEach((item, itemIndex) => {
+      if (item.type !== "userMessage" && item.type !== "agentMessage") {
+        return;
+      }
+
+      const sequence = messages.length + 1;
+      const timestamp = new Date(baseMs + (turnIndex * 10 + itemIndex) * 1000).toISOString();
+      const content =
+        item.type === "userMessage"
+          ? item.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n")
+          : item.text;
+
+      messages.push({
+        id: item.id,
+        sessionId: thread.id,
+        role: item.type === "userMessage" ? "user" : "assistant",
+        content,
+        status: turn.status === "failed" ? "error" : "completed",
+        sequence,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    });
+  });
+
+  return {
+    id: thread.id,
+    workspaceId,
+    title: deriveTitle(thread.preview),
+    turnCount: messages.filter((message) => message.role === "user").length,
+    messages,
+    createdAt: new Date(thread.createdAt * 1000).toISOString(),
+    updatedAt: new Date(thread.updatedAt * 1000).toISOString(),
+  };
+}
+
+function deriveTitle(preview: string) {
+  const normalized = preview.trim();
+  if (!normalized) {
+    return "New Session";
+  }
+
+  return normalized.length > 48 ? `${normalized.slice(0, 48)}…` : normalized;
+}
 
 async function* mapAppServerNotificationsToRuntimeEvents(
   sessionId: string,

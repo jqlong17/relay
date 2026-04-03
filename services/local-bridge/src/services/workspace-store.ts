@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { Workspace } from "@relay/shared-types";
+import type { Session, Workspace } from "@relay/shared-types";
 import { RelayStateStore } from "./relay-state-store";
 
 class WorkspaceStore {
@@ -101,12 +101,41 @@ class WorkspaceStore {
     }
 
     this.relayStateStore.clearPreferredSessionId(workspaceId);
+    this.relayStateStore.clearSessionSnapshotsForWorkspace(workspaceId);
     this.persist();
     return workspace;
   }
 
   getPreferredSessionId(workspaceId: string) {
     return this.relayStateStore.getPreferredSessionId(workspaceId);
+  }
+
+  getSessionListSnapshot(workspaceId: string) {
+    return this.relayStateStore.getSessionListSnapshot(workspaceId);
+  }
+
+  saveSessionListSnapshot(workspaceId: string, items: Session[]) {
+    this.relayStateStore.saveSessionListSnapshot(workspaceId, items);
+  }
+
+  clearSessionListSnapshot(workspaceId: string) {
+    this.relayStateStore.clearSessionListSnapshot(workspaceId);
+  }
+
+  getSessionDetailSnapshot(sessionId: string) {
+    return this.relayStateStore.getSessionDetailSnapshot(sessionId);
+  }
+
+  saveSessionDetailSnapshot(session: Session) {
+    this.relayStateStore.saveSessionDetailSnapshot(session);
+  }
+
+  clearSessionDetailSnapshot(sessionId: string) {
+    this.relayStateStore.clearSessionDetailSnapshot(sessionId);
+  }
+
+  clearSessionSnapshotsForWorkspace(workspaceId: string) {
+    this.relayStateStore.clearSessionSnapshotsForWorkspace(workspaceId);
   }
 
   setPreferredSessionId(workspaceId: string, sessionId: string) {
@@ -121,6 +150,7 @@ class WorkspaceStore {
     const items = [...this.workspaces.values()];
     this.relayStateStore.saveWorkspaces(items);
     this.relayStateStore.pruneWorkspacePreferences(new Set(items.map((workspace) => workspace.id)));
+    this.relayStateStore.pruneSessionSnapshots(new Set(items.map((workspace) => workspace.id)));
   }
 }
 

@@ -1,6 +1,7 @@
 import type { Session } from "@relay/shared-types";
 
 type MobileSessionDrawerProps = {
+  pendingSessionId: string | null;
   closeLabel: string;
   createLabel: string;
   emptyLabel: string;
@@ -14,6 +15,7 @@ type MobileSessionDrawerProps = {
 };
 
 export function MobileSessionDrawer({
+  pendingSessionId,
   closeLabel,
   createLabel,
   emptyLabel,
@@ -42,7 +44,7 @@ export function MobileSessionDrawer({
           {sessions.length === 0 ? <div className="mobile-empty">{emptyLabel}</div> : null}
           {sessions.map((session) => (
             <button
-              className={`mobile-drawer-item ${activeSessionId === session.id ? "mobile-drawer-item-active" : ""}`}
+              className={`mobile-drawer-item ${activeSessionId === session.id ? "mobile-drawer-item-active" : ""} ${pendingSessionId === session.id ? "mobile-drawer-item-pending" : ""}`}
               key={session.id}
               onClick={() => onSelect(session.id)}
               type="button"

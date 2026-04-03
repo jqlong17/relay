@@ -9,6 +9,18 @@ type FilePreview = {
   extension: string;
 };
 
+type SessionListResponse = {
+  items: Session[];
+  activeWorkspaceId: string | null;
+  preferredSessionId?: string | null;
+  source?: "fresh" | "snapshot";
+};
+
+type SessionDetailResponse = {
+  item: Session;
+  source?: "fresh" | "snapshot";
+};
+
 async function listWorkspaces() {
   return fetchJson<{ items: Workspace[]; active: Workspace | null }>("/api/bridge/workspaces");
 }
@@ -35,8 +47,9 @@ async function removeWorkspace(workspaceId: string) {
   );
 }
 
-async function listSessions() {
-  return fetchJson<{ items: Session[]; activeWorkspaceId: string | null; preferredSessionId?: string | null }>("/api/bridge/sessions");
+async function listSessions(options?: { fresh?: boolean }) {
+  const search = options?.fresh ? "?fresh=1" : "";
+  return fetchJson<SessionListResponse>(`/api/bridge/sessions${search}`);
 }
 
 async function createSession(title: string) {
@@ -46,8 +59,9 @@ async function createSession(title: string) {
   });
 }
 
-async function getSession(sessionId: string) {
-  return fetchJson<{ item: Session }>(`/api/bridge/sessions/${sessionId}`);
+async function getSession(sessionId: string, options?: { fresh?: boolean }) {
+  const search = options?.fresh ? "?fresh=1" : "";
+  return fetchJson<SessionDetailResponse>(`/api/bridge/sessions/${sessionId}${search}`);
 }
 
 async function archiveSession(sessionId: string) {

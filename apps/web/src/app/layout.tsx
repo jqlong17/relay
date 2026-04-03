@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Sans, JetBrains_Mono, Noto_Sans_SC } from "next/font/google";
+import { AppShell } from "@/components/app-shell";
 import { getUiCssVariables, loadUiConfig } from "@/config/ui.config";
 import "./globals.css";
 
@@ -39,7 +40,9 @@ export default function RootLayout({
       lang={uiConfig.language === "zh" ? "zh-CN" : "en"}
       className={`${plexSans.variable} ${plexMono.variable} ${notoSansSc.variable}`}
     >
-      <body style={uiCssVariables}>{children}</body>
+      <body style={uiCssVariables}>
+        <AppShell language={uiConfig.language}>{children}</AppShell>
+      </body>
     </html>
   );
 }

@@ -21,8 +21,14 @@ topbarHeight = "40px"
 # workspace 页面左侧 workspace/session 列表宽度
 workspaceLeftWidth = "240px"
 
-# workspace 页面右侧 files 面板宽度
-workspaceRightWidth = "340px"
+# workspace 页面中间主区域的最小宽度
+workspaceCenterMinWidth = "360px"
+
+# workspace 页面右侧 context 面板宽度
+workspaceRightWidth = "min(50vw, 720px)"
+
+# workspace 页面右侧 files 列默认宽度
+workspaceSidepanelPrimaryWidth = "420px"
 
 # workspace 页面中，对话块的最大宽度
 # 这个值越大，越不容易换行
@@ -125,7 +131,9 @@ const defaultUiConfig = {
     topbarHeight: "44px",
     settingsPanelWidth: "320px",
     workspaceLeftWidth: "240px",
-    workspaceRightWidth: "340px",
+    workspaceCenterMinWidth: "360px",
+    workspaceRightWidth: "min(50vw, 720px)",
+    workspaceSidepanelPrimaryWidth: "420px",
     workspaceMessageMaxWidth: "80%",
     workspaceSystemMessageMaxWidth: "58%",
     sessionsLeftWidth: "220px",
@@ -252,7 +260,9 @@ export function getUiCssVariables(config: UiConfig): CSSProperties {
     "--topbar-height": config.layout.topbarHeight,
     "--settings-panel-width": config.layout.settingsPanelWidth,
     "--workspace-left-width": config.layout.workspaceLeftWidth,
+    "--workspace-center-min-width": config.layout.workspaceCenterMinWidth,
     "--workspace-right-width": config.layout.workspaceRightWidth,
+    "--workspace-sidepanel-primary-width": config.layout.workspaceSidepanelPrimaryWidth,
     "--workspace-message-max-width": config.layout.workspaceMessageMaxWidth,
     "--workspace-system-message-max-width": config.layout.workspaceSystemMessageMaxWidth,
     "--sessions-left-width": config.layout.sessionsLeftWidth,

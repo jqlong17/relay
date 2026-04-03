@@ -42,9 +42,10 @@ async function loadInitialMobileData() {
     const sessionsData = (await sessionsResponse.json()) as {
       items: Session[];
       activeWorkspaceId: string | null;
+      preferredSessionId?: string | null;
     };
 
-    const targetSessionId = sessionsData.items[0]?.id;
+    const targetSessionId = sessionsData.preferredSessionId ?? sessionsData.items[0]?.id;
 
     if (!targetSessionId) {
       return {

@@ -7,6 +7,11 @@ import { SessionStore } from "../services/session-store";
 import { WorkspaceStore } from "../services/workspace-store";
 import type { Message, Session } from "@relay/shared-types";
 
+const THREAD_LIST_CACHE_TTL_MS = 15_000;
+const threadListCache = new Map<string, { fetchedAt: number; items: Session[] }>();
+const threadListRefreshes = new Map<string, Promise<Session[]>>();
+const sessionDetailRefreshes = new Map<string, Promise<Session | null>>();
+
 async function handleSessionsRoute(
   request: IncomingMessage,
   response: ServerResponse<IncomingMessage>,
@@ -14,16 +19,38 @@ async function handleSessionsRoute(
   sessionStore: SessionStore,
   codexAppServerService: CodexAppServerService,
 ) {
-  if (request.method === "GET" && request.url === "/sessions") {
+  const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+  const forceFresh = requestUrl.searchParams.get("fresh") === "1";
+
+  if (request.method === "GET" && requestUrl.pathname === "/sessions") {
     const activeWorkspace = workspaceStore.getActive();
-    const items = activeWorkspace
-      ? [
-          ...(await codexAppServerService.threadList({ cwd: activeWorkspace.localPath })).map((thread) =>
-            mapThreadToSessionSummary(thread, activeWorkspace.id),
-          ),
-          ...sessionStore.list(activeWorkspace.id),
-        ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    const sessionItems = activeWorkspace
+      ? sessionStore.list(activeWorkspace.id)
       : [];
+    const snapshot = activeWorkspace
+      ? workspaceStore.getSessionListSnapshot(activeWorkspace.id)
+      : null;
+    let items: Session[] = [];
+    let source: "fresh" | "snapshot" = "fresh";
+
+    if (activeWorkspace) {
+      if (!forceFresh && snapshot) {
+        items = [...snapshot.items, ...sessionItems].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        source = "snapshot";
+        void refreshThreadSummaries(codexAppServerService, workspaceStore, activeWorkspace.localPath, activeWorkspace.id);
+      } else {
+        items = [
+          ...(await getFreshThreadSummaries(
+            codexAppServerService,
+            workspaceStore,
+            activeWorkspace.localPath,
+            activeWorkspace.id,
+          )),
+          ...sessionItems,
+        ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      }
+    }
+
     const preferredSessionId = activeWorkspace
       ? workspaceStore.getPreferredSessionId(activeWorkspace.id)
       : null;
@@ -33,12 +60,13 @@ async function handleSessionsRoute(
         items,
         activeWorkspaceId: activeWorkspace?.id ?? null,
         preferredSessionId,
+        source,
       }),
     );
     return true;
   }
 
-  if (request.method === "POST" && request.url === "/sessions") {
+  if (request.method === "POST" && requestUrl.pathname === "/sessions") {
     const activeWorkspace = workspaceStore.getActive();
 
     if (!activeWorkspace) {
@@ -49,14 +77,15 @@ async function handleSessionsRoute(
 
     const body = await readJsonBody<{ title: string }>(request);
     const item = sessionStore.create(activeWorkspace.id, body.title.trim() || "New Session");
+    invalidateThreadListCache(activeWorkspace.localPath);
     workspaceStore.setPreferredSessionId(activeWorkspace.id, item.id);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ item }));
     return true;
   }
 
-  if (request.method === "POST" && request.url?.startsWith("/sessions/") && request.url.endsWith("/select")) {
-    const sessionId = request.url.replace("/sessions/", "").replace("/select", "");
+  if (request.method === "POST" && requestUrl.pathname.startsWith("/sessions/") && requestUrl.pathname.endsWith("/select")) {
+    const sessionId = requestUrl.pathname.replace("/sessions/", "").replace("/select", "");
     const draftSession = sessionStore.get(sessionId);
     if (draftSession) {
       workspaceStore.setPreferredSessionId(draftSession.workspaceId, sessionId);
@@ -80,13 +109,23 @@ async function handleSessionsRoute(
     return true;
   }
 
-  if (request.method === "GET" && request.url?.startsWith("/sessions/")) {
-    const sessionId = request.url.replace("/sessions/", "");
+  if (request.method === "GET" && requestUrl.pathname.startsWith("/sessions/")) {
+    const sessionId = requestUrl.pathname.replace("/sessions/", "");
     const draftSession = sessionStore.get(sessionId);
     if (draftSession) {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ item: draftSession }));
+      response.end(JSON.stringify({ item: draftSession, source: "fresh" }));
       return true;
+    }
+
+    if (!forceFresh) {
+      const snapshot = workspaceStore.getSessionDetailSnapshot(sessionId);
+      if (snapshot) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ item: snapshot, source: "snapshot" }));
+        void refreshSessionDetail(codexAppServerService, workspaceStore, sessionId);
+        return true;
+      }
     }
 
     const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
@@ -98,35 +137,36 @@ async function handleSessionsRoute(
     }
 
     const item = mapThreadToSessionDetail(thread, resolveWorkspaceId(workspaceStore, thread.cwd));
+    workspaceStore.saveSessionDetailSnapshot(item);
 
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ item }));
+    response.end(JSON.stringify({ item, source: "fresh" }));
     return true;
   }
 
-  if (request.method === "POST" && request.url?.startsWith("/sessions/") && request.url.endsWith("/archive")) {
-    const sessionId = request.url.replace("/sessions/", "").replace("/archive", "");
+  if (request.method === "POST" && requestUrl.pathname.startsWith("/sessions/") && requestUrl.pathname.endsWith("/archive")) {
+    const sessionId = requestUrl.pathname.replace("/sessions/", "").replace("/archive", "");
     const draftSession = sessionStore.remove(sessionId);
     if (draftSession) {
+      invalidateThreadListCacheForAllWorkspaces(workspaceStore);
+      workspaceStore.clearSessionDetailSnapshot(sessionId);
       workspaceStore.clearPreferredSessionId(draftSession.workspaceId, sessionId);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true, archivedSessionId: sessionId }));
       return true;
     }
 
-    const thread = await readThreadWithTurnsFallback(codexAppServerService, sessionId);
     await codexAppServerService.threadArchive(sessionId);
-    if (thread) {
-      const workspaceId = resolveWorkspaceId(workspaceStore, thread.cwd);
-      workspaceStore.clearPreferredSessionId(workspaceId, sessionId);
-    }
+    invalidateThreadListCacheForAllWorkspaces(workspaceStore);
+    workspaceStore.clearSessionDetailSnapshot(sessionId);
+    clearPreferredSessionIdAcrossWorkspaces(workspaceStore, sessionId);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ ok: true, archivedSessionId: sessionId }));
     return true;
   }
 
-  if (request.method === "POST" && request.url?.startsWith("/sessions/") && request.url.endsWith("/rename")) {
-    const sessionId = request.url.replace("/sessions/", "").replace("/rename", "");
+  if (request.method === "POST" && requestUrl.pathname.startsWith("/sessions/") && requestUrl.pathname.endsWith("/rename")) {
+    const sessionId = requestUrl.pathname.replace("/sessions/", "").replace("/rename", "");
     const body = await readJsonBody<{ title: string }>(request);
     const title = body.title.trim();
 
@@ -153,6 +193,8 @@ async function handleSessionsRoute(
     }
 
     const item = mapThreadToSessionDetail(thread, resolveWorkspaceId(workspaceStore, thread.cwd));
+    workspaceStore.saveSessionDetailSnapshot(item);
+    invalidateThreadListCache(thread.cwd);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ ok: true, item }));
     return true;
@@ -172,6 +214,107 @@ async function readThreadWithTurnsFallback(
   } catch {
     return codexAppServerService.threadRead(threadId, false).catch(() => null);
   }
+}
+
+async function getCachedThreadSummaries(
+  codexAppServerService: CodexAppServerService,
+  workspaceStore: WorkspaceStore,
+  cwd: string,
+  workspaceId: string,
+) {
+  const cached = threadListCache.get(cwd);
+  const now = Date.now();
+
+  if (cached && now - cached.fetchedAt < THREAD_LIST_CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  return getFreshThreadSummaries(codexAppServerService, workspaceStore, cwd, workspaceId);
+}
+
+function invalidateThreadListCache(cwd: string) {
+  threadListCache.delete(cwd);
+  threadListRefreshes.delete(cwd);
+}
+
+function invalidateThreadListCacheForAllWorkspaces(workspaceStore: WorkspaceStore) {
+  for (const workspace of workspaceStore.list()) {
+    invalidateThreadListCache(workspace.localPath);
+  }
+}
+
+function clearPreferredSessionIdAcrossWorkspaces(workspaceStore: WorkspaceStore, sessionId: string) {
+  for (const workspace of workspaceStore.list()) {
+    workspaceStore.clearPreferredSessionId(workspace.id, sessionId);
+  }
+}
+
+async function getFreshThreadSummaries(
+  codexAppServerService: CodexAppServerService,
+  workspaceStore: WorkspaceStore,
+  cwd: string,
+  workspaceId: string,
+) {
+  const items = (await codexAppServerService.threadList({ cwd })).map((thread) =>
+    mapThreadToSessionSummary(thread, workspaceId),
+  );
+
+  threadListCache.set(cwd, {
+    fetchedAt: Date.now(),
+    items,
+  });
+  workspaceStore.saveSessionListSnapshot(workspaceId, items);
+
+  return items;
+}
+
+function refreshThreadSummaries(
+  codexAppServerService: CodexAppServerService,
+  workspaceStore: WorkspaceStore,
+  cwd: string,
+  workspaceId: string,
+) {
+  const pending = threadListRefreshes.get(cwd);
+  if (pending) {
+    return pending;
+  }
+
+  const refresh = getFreshThreadSummaries(codexAppServerService, workspaceStore, cwd, workspaceId)
+    .finally(() => {
+      threadListRefreshes.delete(cwd);
+    });
+
+  threadListRefreshes.set(cwd, refresh);
+  return refresh;
+}
+
+function refreshSessionDetail(
+  codexAppServerService: CodexAppServerService,
+  workspaceStore: WorkspaceStore,
+  sessionId: string,
+) {
+  const pending = sessionDetailRefreshes.get(sessionId);
+  if (pending) {
+    return pending;
+  }
+
+  const refresh = readThreadWithTurnsFallback(codexAppServerService, sessionId)
+    .then((thread) => {
+      if (!thread) {
+        workspaceStore.clearSessionDetailSnapshot(sessionId);
+        return null;
+      }
+
+      const session = mapThreadToSessionDetail(thread, resolveWorkspaceId(workspaceStore, thread.cwd));
+      workspaceStore.saveSessionDetailSnapshot(session);
+      return session;
+    })
+    .finally(() => {
+      sessionDetailRefreshes.delete(sessionId);
+    });
+
+  sessionDetailRefreshes.set(sessionId, refresh);
+  return refresh;
 }
 
 function resolveWorkspaceId(workspaceStore: WorkspaceStore, cwd: string) {

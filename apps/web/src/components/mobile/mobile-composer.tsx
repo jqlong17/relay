@@ -1,3 +1,5 @@
+import type { RefObject } from "react";
+
 type MobileComposerProps = {
   composerValue: string;
   disabled: boolean;
@@ -6,7 +8,10 @@ type MobileComposerProps = {
   runLabel: string;
   runningLabel: string;
   onChange: (value: string) => void;
+  onFocus: () => void;
   onRun: () => void;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  wrapperRef: RefObject<HTMLDivElement | null>;
 };
 
 export function MobileComposer({
@@ -17,13 +22,17 @@ export function MobileComposer({
   runLabel,
   runningLabel,
   onChange,
+  onFocus,
   onRun,
+  textareaRef,
+  wrapperRef,
 }: MobileComposerProps) {
   return (
-    <div className="mobile-composer">
+    <div className="mobile-composer" ref={wrapperRef}>
       <textarea
         className="mobile-composer-input"
         onChange={(event) => onChange(event.target.value)}
+        onFocus={onFocus}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -31,6 +40,7 @@ export function MobileComposer({
           }
         }}
         placeholder={placeholder}
+        ref={textareaRef}
         rows={1}
         value={composerValue}
       />

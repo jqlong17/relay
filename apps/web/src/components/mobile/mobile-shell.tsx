@@ -37,6 +37,9 @@ export function MobileShell({
 }: MobileShellProps) {
   const messages = getMessages(language);
   const bridgeOfflineMessage = messages.workspace.bridgeOffline;
+  const topbarRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>(initialWorkspaces);
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(initialActiveWorkspace);
@@ -46,6 +49,10 @@ export function MobileShell({
   const [isLoading, setIsLoading] = useState(false);
   const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
   const [isWorkspaceDrawerOpen, setIsWorkspaceDrawerOpen] = useState(false);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [pendingWorkspaceId, setPendingWorkspaceId] = useState<string | null>(null);
+  const [restoredFromCache, setRestoredFromCache] = useState(false);
+  const [isRunActive, setIsRunActive] = useState(false);
   const [isRunning, startRunTransition] = useTransition();
   const hasInitialSnapshot = initialWorkspaces.length > 0 || initialSessions.length > 0 || initialActiveSession !== null;
   const activeSessionId = activeSession?.id ?? null;
@@ -55,6 +62,25 @@ export function MobileShell({
   const sessionCacheRef = useRef(
     new Map<string, Session>(initialActiveSession ? [[initialActiveSession.id, initialActiveSession]] : []),
   );
+  const storageKey = "relay.mobile.snapshot.v1";
+
+  const syncLayoutMetrics = useCallback(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const root = document.documentElement;
+    const topbarHeight = topbarRef.current?.offsetHeight ?? 0;
+    const composerHeight = composerRef.current?.offsetHeight ?? 0;
+
+    if (topbarHeight > 0) {
+      root.style.setProperty("--mobile-topbar-height", `${topbarHeight}px`);
+    }
+
+    if (composerHeight > 0) {
+      root.style.setProperty("--mobile-composer-height", `${composerHeight}px`);
+    }
+  }, []);
 
   const refreshMobileData = useCallback(async (nextSessionId?: string, options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -85,6 +111,8 @@ export function MobileShell({
       setActiveWorkspace(null);
       setActiveSession(null);
     } finally {
+      setPendingSessionId(null);
+      setPendingWorkspaceId(null);
       if (!options?.silent) {
         setIsLoading(false);
       }
@@ -93,9 +121,27 @@ export function MobileShell({
 
   useEffect(() => {
     if (!hasInitialSnapshot) {
+      const cached = readMobileSnapshot(storageKey);
+      if (cached) {
+        setWorkspaces(cached.workspaces);
+        setSessions(cached.sessions);
+        setActiveWorkspace(cached.activeWorkspace);
+        setActiveSession(cached.activeSession);
+        cached.activeSession && sessionCacheRef.current.set(cached.activeSession.id, cached.activeSession);
+        setRestoredFromCache(true);
+      }
       void refreshMobileData(undefined, { silent: true });
     }
   }, [hasInitialSnapshot, refreshMobileData]);
+
+  useEffect(() => {
+    writeMobileSnapshot(storageKey, {
+      activeSession,
+      activeWorkspace,
+      sessions,
+      workspaces,
+    });
+  }, [activeSession, activeWorkspace, sessions, workspaces]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -110,9 +156,13 @@ export function MobileShell({
     const isIosSafari = isAppleMobile && isSafari;
 
     const updateViewportOffset = () => {
+      const viewportHeight = viewport ? viewport.height + viewport.offsetTop : window.innerHeight;
+      root.style.setProperty("--mobile-app-height", `${viewportHeight}px`);
+
       if (!viewport) {
         root.style.setProperty("--mobile-viewport-bottom-offset", "0px");
         root.style.setProperty("--mobile-ios-bottom-boost", isIosSafari ? "52px" : "0px");
+        syncLayoutMetrics();
         return;
       }
 
@@ -128,14 +178,20 @@ export function MobileShell({
 
       root.style.setProperty("--mobile-viewport-bottom-offset", `${bottomOffset}px`);
       root.style.setProperty("--mobile-ios-bottom-boost", iosBottomBoost);
+      syncLayoutMetrics();
     };
 
     updateViewportOffset();
 
     if (!viewport) {
       window.addEventListener("resize", updateViewportOffset);
+      window.addEventListener("focusin", updateViewportOffset);
+      window.addEventListener("focusout", updateViewportOffset);
       return () => {
         window.removeEventListener("resize", updateViewportOffset);
+        window.removeEventListener("focusin", updateViewportOffset);
+        window.removeEventListener("focusout", updateViewportOffset);
+        root.style.removeProperty("--mobile-app-height");
         root.style.removeProperty("--mobile-viewport-bottom-offset");
         root.style.removeProperty("--mobile-ios-bottom-boost");
       };
@@ -144,15 +200,46 @@ export function MobileShell({
     viewport.addEventListener("resize", updateViewportOffset);
     viewport.addEventListener("scroll", updateViewportOffset);
     window.addEventListener("orientationchange", updateViewportOffset);
+    window.addEventListener("focusin", updateViewportOffset);
+    window.addEventListener("focusout", updateViewportOffset);
 
     return () => {
       viewport.removeEventListener("resize", updateViewportOffset);
       viewport.removeEventListener("scroll", updateViewportOffset);
       window.removeEventListener("orientationchange", updateViewportOffset);
+      window.removeEventListener("focusin", updateViewportOffset);
+      window.removeEventListener("focusout", updateViewportOffset);
+      root.style.removeProperty("--mobile-app-height");
       root.style.removeProperty("--mobile-viewport-bottom-offset");
       root.style.removeProperty("--mobile-ios-bottom-boost");
     };
-  }, []);
+  }, [syncLayoutMetrics]);
+
+  useEffect(() => {
+    syncLayoutMetrics();
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(() => {
+          syncLayoutMetrics();
+        });
+
+    if (resizeObserver && topbarRef.current) {
+      resizeObserver.observe(topbarRef.current);
+    }
+    if (resizeObserver && composerRef.current) {
+      resizeObserver.observe(composerRef.current);
+    }
+
+    window.addEventListener("resize", syncLayoutMetrics);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", syncLayoutMetrics);
+    };
+  }, [syncLayoutMetrics]);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -166,26 +253,49 @@ export function MobileShell({
     return () => window.cancelAnimationFrame(frame);
   }, [activeMessageCount, activeSessionId]);
 
+  useEffect(() => {
+    if (!restoredFromCache) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setRestoredFromCache(false);
+    }, 2200);
+
+    return () => window.clearTimeout(timer);
+  }, [restoredFromCache]);
+
   async function handleSelectSession(sessionId: string) {
     try {
       setError(null);
+      setPendingSessionId(sessionId);
+      setIsSessionDrawerOpen(false);
+      const cached = sessionCacheRef.current.get(sessionId);
+      if (cached) {
+        setActiveSession(cached);
+      }
       void selectSession(sessionId);
       const detail = await loadSessionDetail(sessionId, sessionCacheRef.current);
       setActiveSession(detail);
-      setIsSessionDrawerOpen(false);
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : bridgeOfflineMessage);
+    } finally {
+      setPendingSessionId(null);
     }
   }
 
   async function handleSelectWorkspace(workspace: Workspace) {
     try {
       setError(null);
-      await openWorkspace(workspace.localPath);
+      setPendingWorkspaceId(workspace.id);
       setIsWorkspaceDrawerOpen(false);
+      setActiveWorkspace(workspace);
+      await openWorkspace(workspace.localPath);
       await refreshMobileData();
     } catch (workspaceError) {
       setError(workspaceError instanceof Error ? workspaceError.message : bridgeOfflineMessage);
+    } finally {
+      setPendingWorkspaceId(null);
     }
   }
 
@@ -196,11 +306,14 @@ export function MobileShell({
 
     try {
       setError(null);
+      setPendingSessionId("__creating__");
+      setIsSessionDrawerOpen(false);
       const created = await createSession(`Session ${new Date().toLocaleTimeString()}`);
       await refreshMobileData(created.item.id);
-      setIsSessionDrawerOpen(false);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : bridgeOfflineMessage);
+    } finally {
+      setPendingSessionId(null);
     }
   }
 
@@ -222,6 +335,7 @@ export function MobileShell({
     );
 
     setComposerValue("");
+    setIsRunActive(true);
     setActiveSession((current) => {
       if (!current || current.id !== activeSession.id) {
         return current;
@@ -275,6 +389,8 @@ export function MobileShell({
         } catch (runError) {
           setError(runError instanceof Error ? runError.message : bridgeOfflineMessage);
           setActiveSession((current) => markStreamingMessageErrored(current));
+        } finally {
+          setIsRunActive(false);
         }
       })();
     });
@@ -284,9 +400,43 @@ export function MobileShell({
     currentMessageRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }
 
+  function handleComposerFocus() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.setTimeout(() => {
+      syncLayoutMetrics();
+      scrollToLatest();
+      composerInputRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 140);
+  }
+
+  const statusLabel = error
+    ? messages.mobile.offline
+    : isRunActive || isRunning
+      ? messages.mobile.running
+      : pendingWorkspaceId
+        ? messages.mobile.switchingWorkspace
+        : pendingSessionId === "__creating__"
+          ? messages.mobile.creatingSession
+          : pendingSessionId
+            ? messages.mobile.switchingSession
+            : isLoading
+              ? messages.mobile.syncing
+              : restoredFromCache
+                ? messages.mobile.restored
+                : messages.mobile.online;
+
+  const statusDetail = error
+    ? error
+    : restoredFromCache
+      ? messages.mobile.cachedSnapshot
+      : `${messages.mobile.currentSession} · ${activeSession?.title ?? messages.mobile.noSession}`;
+
   return (
     <main className="mobile-app">
-      <div className="mobile-topbar">
+      <div className="mobile-topbar" ref={topbarRef}>
         <MobileHeader
           brand="Relay"
           isSessionsOpen={isSessionDrawerOpen}
@@ -299,8 +449,10 @@ export function MobileShell({
             setIsSessionDrawerOpen(false);
             setIsWorkspaceDrawerOpen((current) => !current);
           }}
+          sessionName={activeSession?.title ?? messages.mobile.noSession}
           sessionsLabel={messages.mobile.sessions}
-          statusLabel={messages.mobile.online}
+          statusDetail={statusDetail}
+          statusLabel={statusLabel}
           workspaceName={activeWorkspace?.name ?? messages.workspace.noWorkspace}
           workspacesLabel={messages.mobile.workspaces}
         />
@@ -321,8 +473,11 @@ export function MobileShell({
         disabled={!activeSession}
         isRunning={isRunning}
         onChange={setComposerValue}
+        onFocus={handleComposerFocus}
         onRun={() => void handleRun()}
         placeholder=""
+        textareaRef={composerInputRef}
+        wrapperRef={composerRef}
         runLabel={messages.common.run}
         runningLabel={messages.workspace.loading}
       />
@@ -336,16 +491,19 @@ export function MobileShell({
         onClose={() => setIsSessionDrawerOpen(false)}
         onCreate={() => void handleCreateSession()}
         onSelect={(sessionId) => void handleSelectSession(sessionId)}
+        pendingSessionId={pendingSessionId}
         sessions={sessions.filter((session) => session.workspaceId === activeWorkspace?.id)}
         title={messages.mobile.sessions}
       />
 
       <MobileWorkspaceDrawer
+        activeWorkspaceId={activeWorkspace?.id ?? null}
         closeLabel={messages.settings.close}
         emptyLabel={messages.workspace.noWorkspace}
         isOpen={isWorkspaceDrawerOpen}
         onClose={() => setIsWorkspaceDrawerOpen(false)}
         onSelect={(workspace) => void handleSelectWorkspace(workspace)}
+        pendingWorkspaceId={pendingWorkspaceId}
         title={messages.mobile.workspaces}
         workspaces={workspaces}
       />
@@ -459,4 +617,38 @@ function markStreamingMessageErrored(session: Session | null) {
     messages,
   };
   return nextSession;
+}
+
+type MobileSnapshot = {
+  activeSession: Session | null;
+  activeWorkspace: Workspace | null;
+  sessions: Session[];
+  workspaces: Workspace[];
+};
+
+function readMobileSnapshot(storageKey: string): MobileSnapshot | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return null;
+    }
+
+    return JSON.parse(raw) as MobileSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+function writeMobileSnapshot(storageKey: string, snapshot: MobileSnapshot) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+  } catch {}
 }
