@@ -23,7 +23,7 @@ export function TopNav({ language }: TopNavProps) {
       { key: "sessions", href: "/sessions", label: messages.nav.sessions },
       { key: "memories", href: "/memories", label: messages.nav.memories },
       { key: "automation", href: "/automation", label: messages.nav.automation },
-      { key: "readme", href: "/readme", label: messages.nav.readme },
+      { key: "readme", href: "/about", label: messages.nav.readme },
       { key: "settings", href: "/settings", label: messages.nav.settings },
     ],
     [messages],
