@@ -54,6 +54,14 @@ describe("WorkspaceClient", () => {
       },
       workspaceId: "workspace-1",
     });
+    bridgeMocks.getFilePreview.mockResolvedValue({
+      item: {
+        path: "/tmp/workspace/README.md",
+        name: "README.md",
+        content: "# README\n\npreview content",
+        extension: ".md",
+      },
+    });
     bridgeMocks.getSession.mockResolvedValue({
       item: makeSessionDetail({
         id: "session-1",
@@ -89,15 +97,20 @@ describe("WorkspaceClient", () => {
       ],
     });
     bridgeMocks.runSessionStream.mockResolvedValue(undefined);
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    HTMLDivElement.prototype.scrollTo = vi.fn();
   });
 
   it("renders timeline memories in summary and hides linked files and timeline sections", async () => {
     render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
 
     await waitFor(() => {
       expect(bridgeMocks.getSessionMemories).toHaveBeenCalledWith("session-1");
     });
+    await openWorkspaceSidepanel(user);
 
+    expect(screen.getByText("已同步到最新")).toBeTruthy();
     expect(screen.getByText("记忆整理")).toBeTruthy();
     expect(screen.getByText("【记忆优化】 · 20轮时间线记忆")).toBeTruthy();
     expect(screen.getByText(/保留了/)).toBeTruthy();
@@ -112,6 +125,7 @@ describe("WorkspaceClient", () => {
     await waitFor(() => {
       expect(bridgeMocks.getSessionMemories).toHaveBeenCalledWith("session-1");
     });
+    await openWorkspaceSidepanel(user);
 
     await user.click(screen.getByRole("tab", { name: "动作" }));
 
@@ -128,6 +142,7 @@ describe("WorkspaceClient", () => {
     await waitFor(() => {
       expect(bridgeMocks.getSessionMemories).toHaveBeenCalledWith("session-1");
     });
+    await openWorkspaceSidepanel(user);
 
     await user.click(screen.getByRole("tab", { name: "动作" }));
     await user.click(screen.getByRole("button", { name: /时间线记忆/ }));
@@ -136,15 +151,36 @@ describe("WorkspaceClient", () => {
     expect(screen.getByRole("button", { name: /时间线记忆/ })).toBeTruthy();
   });
 
-  it("adds an automation quick action that fills the composer", async () => {
+  it("shows a user preference memory action and fills the composer with recent-turn preference prompt", async () => {
     render(<WorkspaceClient language="zh" />);
     const user = userEvent.setup();
 
     await waitFor(() => {
       expect(bridgeMocks.getSessionMemories).toHaveBeenCalledWith("session-1");
     });
+    await openWorkspaceSidepanel(user);
 
     await user.click(screen.getByRole("tab", { name: "动作" }));
+    await user.click(screen.getByRole("button", { name: /记录用户偏好/ }));
+
+    const input = screen.getByPlaceholderText("继续在当前工作区中执行任务...") as HTMLInputElement;
+    expect(input.value).toContain("请将最近 3 轮对话处理为一条“用户偏好记忆”");
+    expect(input.value).toContain("当前所处的场景或环境信息");
+    expect(input.value).toContain("最近 3 轮对话参考");
+    expect(input.value).toContain("1. 用户: 请整理记忆系统");
+    expect(input.value).toContain("2. 助手: 已开始整理");
+  });
+
+  it("shows automation as a sidepanel tab and fills the composer", async () => {
+    render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(bridgeMocks.getSessionMemories).toHaveBeenCalledWith("session-1");
+    });
+    await openWorkspaceSidepanel(user);
+
+    await user.click(screen.getByRole("tab", { name: "自动化" }));
     await user.click(screen.getByRole("button", { name: /自动化/ }));
 
     const input = screen.getByPlaceholderText("继续在当前工作区中执行任务...") as HTMLTextAreaElement;
@@ -216,6 +252,188 @@ describe("WorkspaceClient", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
+  it("loads folder children on demand when expanding a file tree folder", async () => {
+    bridgeMocks.getFileTree
+      .mockResolvedValueOnce({
+        item: {
+          id: "root",
+          name: "root",
+          path: "/tmp/workspace",
+          kind: "folder",
+          hasChildren: true,
+          children: [
+            {
+              id: "workflow",
+              name: "workflow",
+              path: "/tmp/workspace/workflow",
+              kind: "folder",
+              hasChildren: true,
+              children: [
+                {
+                  id: "plan",
+                  name: "执行计划",
+                  path: "/tmp/workspace/workflow/执行计划",
+                  kind: "folder",
+                  hasChildren: true,
+                },
+              ],
+            },
+          ],
+        },
+        workspaceId: "workspace-1",
+      })
+      .mockResolvedValueOnce({
+        item: {
+          id: "plan",
+          name: "执行计划",
+          path: "/tmp/workspace/workflow/执行计划",
+          kind: "folder",
+          hasChildren: true,
+          children: [
+            {
+              id: "plan-file-1",
+              name: "05-Relay-v0.1.0-统一实时会话架构TDD执行计划.md",
+              path: "/tmp/workspace/workflow/执行计划/05-Relay-v0.1.0-统一实时会话架构TDD执行计划.md",
+              kind: "file",
+            },
+          ],
+        },
+        workspaceId: "workspace-1",
+      });
+
+    render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(bridgeMocks.getSessionMemories).toHaveBeenCalledWith("session-1");
+    });
+    await openWorkspaceSidepanel(user);
+
+    await user.click(screen.getByRole("tab", { name: "文件" }));
+    await user.click(screen.getByRole("button", { name: /workflow/i }));
+    await user.click(screen.getByRole("button", { name: /执行计划/i }));
+
+    await waitFor(() => {
+      expect(bridgeMocks.getFileTree).toHaveBeenLastCalledWith({
+        path: "/tmp/workspace/workflow/执行计划",
+        depth: 2,
+      });
+    });
+
+    expect(
+      screen.getByText("05-Relay-v0.1.0-统一实时会话架构TDD执行计划.md"),
+    ).toBeTruthy();
+  });
+
+  it("fetches folder children when a folder is marked hasChildren but currently has an empty children list", async () => {
+    bridgeMocks.getFileTree
+      .mockResolvedValueOnce({
+        item: {
+          id: "root",
+          name: "root",
+          path: "/tmp/workspace",
+          kind: "folder",
+          hasChildren: true,
+          children: [
+            {
+              id: "workflow",
+              name: "workflow",
+              path: "/tmp/workspace/workflow",
+              kind: "folder",
+              hasChildren: true,
+              children: [
+                {
+                  id: "plan",
+                  name: "执行计划",
+                  path: "/tmp/workspace/workflow/执行计划",
+                  kind: "folder",
+                  hasChildren: true,
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+        workspaceId: "workspace-1",
+      })
+      .mockResolvedValueOnce({
+        item: {
+          id: "plan",
+          name: "执行计划",
+          path: "/tmp/workspace/workflow/执行计划",
+          kind: "folder",
+          hasChildren: true,
+          children: [
+            {
+              id: "plan-file-2",
+              name: "计划说明.md",
+              path: "/tmp/workspace/workflow/执行计划/计划说明.md",
+              kind: "file",
+            },
+          ],
+        },
+        workspaceId: "workspace-1",
+      });
+
+    render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "展开" })).toBeTruthy();
+    });
+    await openWorkspaceSidepanel(user);
+
+    await user.click(screen.getByRole("tab", { name: "文件" }));
+    await user.click(screen.getByRole("button", { name: /workflow/i }));
+    await user.click(screen.getByRole("button", { name: /执行计划/i }));
+
+    await waitFor(() => {
+      expect(bridgeMocks.getFileTree).toHaveBeenLastCalledWith({
+        path: "/tmp/workspace/workflow/执行计划",
+        depth: 2,
+      });
+    });
+
+    expect(screen.getByText("计划说明.md")).toBeTruthy();
+  });
+
+  it("locates and highlights the earliest message when clicking the earliest shortcut", async () => {
+    render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByText("请整理记忆系统")).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole("button", { name: "最早一条" }));
+
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+    const firstMessage = screen.getByText("请整理记忆系统").closest("article");
+    expect(firstMessage?.className).toContain("workspace-log-item-highlighted");
+  });
+
+  it("jumps to the latest message by scrolling the timeline container to bottom", async () => {
+    render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByText("已开始整理")).toBeTruthy();
+    });
+
+    const scrollToMock = vi.mocked(HTMLDivElement.prototype.scrollTo);
+    scrollToMock.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "最新一条" }));
+
+    await waitFor(() => {
+      expect(scrollToMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          behavior: "smooth",
+        }),
+      );
+    });
+  });
+
   it("shows mention suggestions and adds selected context chips", async () => {
     render(<WorkspaceClient language="zh" />);
     const user = userEvent.setup();
@@ -251,7 +469,7 @@ describe("WorkspaceClient", () => {
     await user.type(input, "@记");
     await user.click(await screen.findByRole("option", { name: /【记忆优化】 · 20轮时间线记忆/ }));
     await user.type(input, "继续优化这个方案");
-    await user.click(screen.getByRole("button", { name: "运行" }));
+    await user.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
       expect(bridgeMocks.runSessionStream).toHaveBeenCalledWith(
@@ -381,7 +599,7 @@ describe("WorkspaceClient", () => {
     });
 
     await user.type(screen.getByPlaceholderText("继续在当前工作区中执行任务..."), "检查过程显示");
-    await user.click(screen.getByRole("button", { name: "运行" }));
+    await user.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
       expect(screen.getByText("Thinking")).toBeTruthy();
@@ -443,7 +661,7 @@ describe("WorkspaceClient", () => {
     await user.type(input, "@性");
     await user.click(await screen.findByRole("option", { name: /【性能优化】/ }));
     await user.type(input, "结合它继续设计");
-    await user.click(screen.getByRole("button", { name: "运行" }));
+    await user.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
       expect(bridgeMocks.getSession).toHaveBeenCalledWith("session-2");
@@ -525,6 +743,13 @@ describe("WorkspaceClient", () => {
     });
   });
 });
+
+async function openWorkspaceSidepanel(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "展开" }));
+  await waitFor(() => {
+    expect(screen.getByRole("tab", { name: "摘要" })).toBeTruthy();
+  });
+}
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {

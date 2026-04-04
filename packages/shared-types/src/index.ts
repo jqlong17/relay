@@ -1,3 +1,20 @@
+export type {
+  AutomationCapabilities,
+  AutomationKind,
+  AutomationRule,
+  AutomationSource,
+  AutomationStatus,
+  GoalAutomationRule,
+  GoalAutomationRuleDefinition,
+  GoalAutomationRuleInput,
+  GoalAutomationRunRecord,
+  GoalAutomationRunState,
+  GoalAutomationRunStatus,
+  GoalAutomationRunStep,
+  GoalAutomationStopReason,
+  GoalAutomationTargetSessionMode,
+  TimelineMemoryCheckpointAutomationRule,
+} from "./automation";
 export type { FileTreeKind, FileTreeNode } from "./file-tree";
 export type { CreateTimelineMemoryInput, TimelineMemory, TimelineMemoryStatus } from "./memory";
 export type { Message, MessageRole, MessageStatus } from "./message";

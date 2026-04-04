@@ -5,6 +5,7 @@ type FileTreeNode = {
   name: string;
   kind: FileTreeKind;
   path: string;
+  hasChildren?: boolean;
   children?: FileTreeNode[];
 };
 

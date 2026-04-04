@@ -1,8 +1,7 @@
 import type { Session, TimelineMemory, Workspace } from "@relay/shared-types";
+import { MemoryStore, createThemeKey, getMemoryPromptDefinition } from "@relay/memory-core";
 
 import { CodexAppServerService, type AppServerNotification } from "./codex-app-server";
-import { MemoryStore, createThemeKey } from "./memory-store";
-import { TIMELINE_MEMORY_PROMPT_VERSION, buildTimelineMemoryPrompt } from "./timeline-memory-prompt";
 import { WorkspaceStore } from "./workspace-store";
 
 type GenerateTimelineMemoryText = (input: {
@@ -81,7 +80,7 @@ class TimelineMemoryService {
         sessionTitleSnapshot: session.title,
         memoryDate: new Date().toISOString().slice(0, 10),
         checkpointTurnCount,
-        promptVersion: TIMELINE_MEMORY_PROMPT_VERSION,
+        promptVersion: getMemoryPromptDefinition("timeline").version,
         title: `${session.title} · ${checkpointTurnCount}轮时间线记忆`,
         content: content.trim(),
         status: "completed",
@@ -102,9 +101,10 @@ class TimelineMemoryService {
     });
 
     try {
+      const promptDefinition = getMemoryPromptDefinition("timeline");
       const turnStream = await this.dependencies.codexAppServerService.startTurnStream(
         thread.id,
-        buildTimelineMemoryPrompt(input.session, input.checkpointTurnCount),
+        promptDefinition.buildPrompt(input.session, input.checkpointTurnCount),
       );
       return await collectAssistantText(turnStream.notifications);
     } finally {

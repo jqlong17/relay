@@ -146,11 +146,17 @@ class WorkspaceStore {
     this.relayStateStore.clearPreferredSessionId(workspaceId, sessionId);
   }
 
+  getRelayStateStore() {
+    return this.relayStateStore;
+  }
+
   private persist() {
     const items = [...this.workspaces.values()];
+    const validWorkspaceIds = new Set(items.map((workspace) => workspace.id));
     this.relayStateStore.saveWorkspaces(items);
-    this.relayStateStore.pruneWorkspacePreferences(new Set(items.map((workspace) => workspace.id)));
-    this.relayStateStore.pruneSessionSnapshots(new Set(items.map((workspace) => workspace.id)));
+    this.relayStateStore.pruneWorkspacePreferences(validWorkspaceIds);
+    this.relayStateStore.pruneSessionSnapshots(validWorkspaceIds);
+    this.relayStateStore.pruneInternalAutomationState(validWorkspaceIds);
   }
 }
 

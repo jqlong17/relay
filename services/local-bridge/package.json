@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@relay/memory-core": "workspace:*",
     "@relay/shared-types": "workspace:*"
   }
 }

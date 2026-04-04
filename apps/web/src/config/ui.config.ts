@@ -5,7 +5,23 @@ import path from "node:path";
 import { parse } from "smol-toml";
 
 type AppLanguage = "zh" | "en";
-type UiConfig = typeof defaultUiConfig;
+type AppTheme = "dark" | "light";
+type AppDensity = "compact" | "comfortable";
+type AppUiFont = "source-sans-3" | "ibm-plex-sans";
+type AppMonoFont = "jetbrains-mono" | "ibm-plex-mono";
+type AppCjkFont = "noto-sans-sc";
+
+type WidenLiteral<T> = T extends string
+  ? string
+  : T extends number
+    ? number
+    : T extends boolean
+      ? boolean
+      : T;
+
+type DeepWiden<T> = {
+  [K in keyof T]: T[K] extends Record<string, unknown> ? DeepWiden<T[K]> : WidenLiteral<T[K]>;
+};
 
 const defaultUserUiToml = `# Relay UI 用户配置文件
 # 这份文件用于覆盖内置的默认 UI 配置。
@@ -13,6 +29,27 @@ const defaultUserUiToml = `# Relay UI 用户配置文件
 
 # 全局界面语言：zh / en
 language = "zh"
+
+# 全局主题：dark / light
+theme = "dark"
+
+# 界面密度：compact / comfortable
+# compact = 当前默认的紧凑布局
+# comfortable = 更大的字号、更松的间距
+density = "compact"
+
+[font]
+# UI 正文字体
+# 可选：source-sans-3 / ibm-plex-sans
+ui = "source-sans-3"
+
+# 等宽字体
+# 可选：jetbrains-mono / ibm-plex-mono
+mono = "jetbrains-mono"
+
+# 中文字体
+# 可选：noto-sans-sc
+cjk = "noto-sans-sc"
 
 [layout]
 # 顶部导航栏高度
@@ -78,8 +115,7 @@ titleSm = "0.94rem"
 title = "1rem"
 `;
 
-const defaultUiConfig = {
-  language: "zh" as AppLanguage,
+const darkThemeTokens = {
   color: {
     bg: "#020304",
     bgPanel: "#08090b",
@@ -115,6 +151,51 @@ const defaultUiConfig = {
     accentBorder: "rgba(255, 122, 26, 0.7)",
     codeText: "#cfd6e3",
   },
+} as const;
+
+const lightThemeTokens = {
+  color: {
+    bg: "#f6f8fb",
+    bgPanel: "#dde6f1",
+    bgSoft: "#eef3f8",
+    bgTopbar: "#edf2f7",
+    bgElevated: "#ffffff",
+    bgSettings: "#f1f5f9",
+    line: "rgba(73, 89, 110, 0.12)",
+    lineStrong: "rgba(73, 89, 110, 0.22)",
+    text: "#1f2937",
+    textSoft: "#556274",
+    textDim: "#7b8796",
+    blue: "#2563eb",
+    green: "#16925b",
+    amber: "#b7791f",
+    red: "#dc4c64",
+    accent: "#ea6d3f",
+  },
+  surface: {
+    overlay: "rgba(20, 30, 45, 0.06)",
+    level1: "rgba(58, 87, 122, 0.03)",
+    level2: "rgba(58, 87, 122, 0.045)",
+    level3: "rgba(58, 87, 122, 0.06)",
+    level4: "rgba(58, 87, 122, 0.075)",
+    level5: "rgba(58, 87, 122, 0.09)",
+    sessionActive: "#d4dee9",
+    calendar1: "rgba(37, 99, 235, 0.14)",
+    calendar2: "rgba(37, 99, 235, 0.24)",
+    calendar3: "rgba(37, 99, 235, 0.38)",
+    legend1: "rgba(37, 99, 235, 0.16)",
+    legend2: "rgba(37, 99, 235, 0.3)",
+    legend3: "rgba(37, 99, 235, 0.5)",
+    accentBorder: "rgba(234, 109, 63, 0.55)",
+    codeText: "#273142",
+  },
+} as const;
+
+function getThemeTokens(theme: AppTheme) {
+  return theme === "light" ? lightThemeTokens : darkThemeTokens;
+}
+
+const compactDensityTokens = {
   spacing: {
     1: "4px",
     2: "6px",
@@ -165,8 +246,96 @@ const defaultUiConfig = {
   },
 } as const;
 
+const comfortableDensityTokens = {
+  spacing: {
+    1: "5px",
+    2: "8px",
+    3: "11px",
+    4: "13px",
+    5: "16px",
+    6: "18px",
+    7: "20px",
+    8: "24px",
+    9: "28px",
+    10: "32px",
+  },
+  layout: {
+    topbarHeight: "48px",
+    settingsPanelWidth: "352px",
+    workspaceLeftWidth: "268px",
+    workspaceCenterMinWidth: "400px",
+    workspaceRightWidth: "min(54vw, 800px)",
+    workspaceSidepanelPrimaryWidth: "460px",
+    workspaceMessageMaxWidth: "78%",
+    workspaceSystemMessageMaxWidth: "60%",
+    sessionsLeftWidth: "248px",
+    sessionsRightWidth: "396px",
+    memoriesLeftRatio: "0.74fr",
+    memoriesRightRatio: "1.26fr",
+    memoriesRightMinWidth: "456px",
+    panelCenterXPadding: "56px",
+  },
+  measure: {
+    borderWidth: "1px",
+    accentStripWidth: "2px",
+    sessionRowIndent: "26px",
+    tabMinHeight: "24px",
+    calendarUnitSize: "12px",
+    calendarCellGap: "7px",
+    calendarCellPaddingY: "7px",
+    calendarCellPaddingX: "8px",
+    workspaceLogNudgeY: "6px",
+  },
+  typography: {
+    metaXs: "0.76rem",
+    meta: "0.82rem",
+    uiSm: "0.88rem",
+    ui: "0.96rem",
+    nav: "0.98rem",
+    titleSm: "1.06rem",
+    title: "1.14rem",
+  },
+} as const;
+
+function getDensityTokens(density: AppDensity) {
+  return density === "comfortable" ? comfortableDensityTokens : compactDensityTokens;
+}
+
+const defaultUiConfig = {
+  language: "zh" as AppLanguage,
+  theme: "dark" as AppTheme,
+  density: "compact" as AppDensity,
+  font: {
+    ui: "source-sans-3" as AppUiFont,
+    mono: "jetbrains-mono" as AppMonoFont,
+    cjk: "noto-sans-sc" as AppCjkFont,
+  },
+  ...getThemeTokens("dark"),
+  ...getDensityTokens("compact"),
+} as const;
+
+type UiConfig = {
+  language: AppLanguage;
+  theme: AppTheme;
+  density: AppDensity;
+  font: {
+    ui: AppUiFont;
+    mono: AppMonoFont;
+    cjk: AppCjkFont;
+  };
+  color: DeepWiden<typeof darkThemeTokens.color>;
+  surface: DeepWiden<typeof darkThemeTokens.surface>;
+  spacing: DeepWiden<typeof compactDensityTokens.spacing>;
+  layout: DeepWiden<typeof compactDensityTokens.layout>;
+  measure: DeepWiden<typeof compactDensityTokens.measure>;
+  typography: DeepWiden<typeof compactDensityTokens.typography>;
+};
+
 type UserUiConfig = {
   language?: AppLanguage;
+  theme?: AppTheme;
+  density?: AppDensity;
+  font?: Partial<UiConfig["font"]>;
   color?: Partial<UiConfig["color"]>;
   surface?: Partial<UiConfig["surface"]>;
   spacing?: Partial<UiConfig["spacing"]>;
@@ -176,14 +345,22 @@ type UserUiConfig = {
 };
 
 function mergeUiConfig(base: UiConfig, override: UserUiConfig): UiConfig {
+  const theme = override.theme ?? base.theme;
+  const density = override.density ?? base.density;
+  const themeTokens = getThemeTokens(theme);
+  const densityTokens = getDensityTokens(density);
+
   return {
     language: override.language ?? base.language,
-    color: { ...base.color, ...override.color },
-    surface: { ...base.surface, ...override.surface },
-    spacing: { ...base.spacing, ...override.spacing },
-    layout: { ...base.layout, ...override.layout },
-    measure: { ...base.measure, ...override.measure },
-    typography: { ...base.typography, ...override.typography },
+    theme,
+    density,
+    font: { ...base.font, ...override.font },
+    color: { ...themeTokens.color, ...override.color },
+    surface: { ...themeTokens.surface, ...override.surface },
+    spacing: { ...densityTokens.spacing, ...override.spacing },
+    layout: { ...densityTokens.layout, ...override.layout },
+    measure: { ...densityTokens.measure, ...override.measure },
+    typography: { ...densityTokens.typography, ...override.typography },
   };
 }
 
@@ -291,4 +468,4 @@ export function getUiCssVariables(config: UiConfig): CSSProperties {
 }
 
 export { defaultUserUiToml };
-export type { AppLanguage, UiConfig, UserUiConfig };
+export type { AppLanguage, AppTheme, AppDensity, AppUiFont, AppMonoFont, AppCjkFont, UiConfig, UserUiConfig };

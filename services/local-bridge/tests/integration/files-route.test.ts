@@ -114,4 +114,69 @@ describe("files route", () => {
     expect(data.path).toBe(filePath);
     expect(opened).toEqual([{ targetPath: filePath, isDirectory: false }]);
   });
+
+  it("returns a subtree for a requested folder path with bounded depth", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-files-subtree-"));
+    tempDirs.push(workspacePath);
+    const workflowPath = path.join(workspacePath, "workflow");
+    const planPath = path.join(workflowPath, "执行计划");
+    const nestedPath = path.join(planPath, "子目录");
+    fs.mkdirSync(nestedPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(planPath, "05-Relay-v0.1.0-统一实时会话架构TDD执行计划.md"),
+      "# plan\n",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(nestedPath, "deep.md"), "# deep\n", "utf8");
+
+    activeServer = createBridgeServer();
+
+    await new Promise<void>((resolve, reject) => {
+      activeServer?.listen(0, "127.0.0.1", (error?: Error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+
+    const address = activeServer.address() as AddressInfo;
+    await fetch(`http://127.0.0.1:${address.port}/workspaces/open`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ localPath: workspacePath }),
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/files/tree?path=${encodeURIComponent(planPath)}&depth=2`,
+    );
+    const data = (await response.json()) as {
+      item: {
+        path: string;
+        name: string;
+        children?: Array<{
+          name: string;
+          kind: string;
+          hasChildren?: boolean;
+          children?: Array<{ name: string }>;
+        }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(data.item.path).toBe(planPath);
+    expect(data.item.name).toBe("执行计划");
+    expect(
+      data.item.children?.some(
+        (child) => child.kind === "file" && child.name === "05-Relay-v0.1.0-统一实时会话架构TDD执行计划.md",
+      ),
+    ).toBe(true);
+    expect(
+      data.item.children?.some(
+        (child) => child.kind === "folder" && child.name === "子目录" && child.hasChildren === true,
+      ),
+    ).toBe(true);
+  });
 });

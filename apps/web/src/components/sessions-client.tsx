@@ -1,27 +1,15 @@
 "use client";
 
-import type { Dispatch, MouseEvent, SetStateAction } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { FileTreeNode, Session, Workspace } from "@relay/shared-types";
+import type { Session, TimelineMemory, Workspace } from "@relay/shared-types";
 import { getMessages } from "@/config/messages";
 import type { AppLanguage } from "@/config/ui.config";
-import { getFilePreview, getFileTree, getSession, listSessions, listWorkspaces, openWorkspace, selectSession } from "@/lib/api/bridge";
-import type { FilePreview } from "@/lib/api/bridge";
+import { generateSessionMemory, getSession, getSessionMemories, listSessions, listWorkspaces, openWorkspace, selectSession } from "@/lib/api/bridge";
 import { renderMarkdown } from "@/lib/markdown";
 
 type SessionsClientProps = {
   language: AppLanguage;
-};
-
-type VisibleFileTreeNode = {
-  id: string;
-  name: string;
-  kind: FileTreeNode["kind"];
-  depth: number;
-  path: string;
-  isExpanded: boolean;
-  hasChildren: boolean;
 };
 
 export function SessionsClient({ language }: SessionsClientProps) {
@@ -31,23 +19,14 @@ export function SessionsClient({ language }: SessionsClientProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
-  const [fileTree, setFileTree] = useState<FileTreeNode | null>(null);
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
-  const [preview, setPreview] = useState<FilePreview | null>(null);
+  const [sessionMemories, setSessionMemories] = useState<TimelineMemory[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isSwitchingSession, setIsSwitchingSession] = useState(false);
+  const [isMemoriesLoading, setIsMemoriesLoading] = useState(false);
+  const [isGeneratingMemory, setIsGeneratingMemory] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const visibleFileTree = useMemo(
-    () => buildVisibleFileTree(fileTree, collapsedFolders),
-    [fileTree, collapsedFolders],
-  );
-
-  const loadFileTree = useCallback(async () => {
-    const treeResponse = await getFileTree();
-    setFileTree(treeResponse.item);
-    setCollapsedFolders(createInitialCollapsedFolders(treeResponse.item));
-  }, []);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const groupedMemories = useMemo(() => groupMemoriesByDate(sessionMemories), [sessionMemories]);
 
   const ensureSessionWorkspaceActive = useCallback(
     async (session: Session, knownWorkspaces: Workspace[]) => {
@@ -65,10 +44,24 @@ export function SessionsClient({ language }: SessionsClientProps) {
           })),
         );
       }
-
-      await loadFileTree();
     },
-    [loadFileTree],
+    [],
+  );
+
+  const loadSessionMemories = useCallback(
+    async (sessionId: string) => {
+      setIsMemoriesLoading(true);
+      try {
+        const response = await getSessionMemories(sessionId);
+        setSessionMemories(response.items);
+      } catch (memoryError) {
+        setError(memoryError instanceof Error ? memoryError.message : bridgeOfflineMessage);
+        setSessionMemories([]);
+      } finally {
+        setIsMemoriesLoading(false);
+      }
+    },
+    [bridgeOfflineMessage],
   );
 
   const loadSessionDetail = useCallback(
@@ -78,9 +71,11 @@ export function SessionsClient({ language }: SessionsClientProps) {
       await ensureSessionWorkspaceActive(nextSession, knownWorkspaces);
       setActiveSession(nextSession);
       setActiveSessionId(nextSession.id);
+      activeSessionIdRef.current = nextSession.id;
+      await loadSessionMemories(nextSession.id);
       return nextSession;
     },
-    [ensureSessionWorkspaceActive],
+    [ensureSessionWorkspaceActive, loadSessionMemories],
   );
 
   const refreshSessionsPage = useCallback(async () => {
@@ -95,12 +90,11 @@ export function SessionsClient({ language }: SessionsClientProps) {
       if (sessionData.items.length === 0) {
         setActiveSession(null);
         setActiveSessionId(null);
-        setFileTree(null);
-        setPreview(null);
+        setSessionMemories([]);
         return;
       }
 
-      const targetSessionId = activeSessionId ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id ?? null;
+      const targetSessionId = activeSessionIdRef.current ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id ?? null;
       if (!targetSessionId) {
         return;
       }
@@ -112,12 +106,11 @@ export function SessionsClient({ language }: SessionsClientProps) {
       setSessions([]);
       setActiveSession(null);
       setActiveSessionId(null);
-      setFileTree(null);
-      setPreview(null);
+      setSessionMemories([]);
     } finally {
       setIsLoading(false);
     }
-  }, [activeSessionId, bridgeOfflineMessage, loadSessionDetail]);
+  }, [bridgeOfflineMessage, loadSessionDetail]);
 
   useEffect(() => {
     void refreshSessionsPage();
@@ -130,60 +123,33 @@ export function SessionsClient({ language }: SessionsClientProps) {
 
     try {
       setError(null);
-      setPreview(null);
+      setIsSwitchingSession(true);
+      setActiveSessionId(sessionId);
+      activeSessionIdRef.current = sessionId;
       void selectSession(sessionId);
       await loadSessionDetail(sessionId, workspaces);
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : bridgeOfflineMessage);
+    } finally {
+      setIsSwitchingSession(false);
     }
   }
 
-  async function openLinkedFile(filePath: string) {
+  async function handleGenerateMemory(force = false) {
+    if (!activeSession) {
+      return;
+    }
+
     try {
       setError(null);
-      setIsPreviewLoading(true);
-      expandFileAncestors(filePath, setCollapsedFolders);
-      const previewResponse = await getFilePreview(filePath);
-      setPreview(previewResponse.item);
-    } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : bridgeOfflineMessage);
+      setIsGeneratingMemory(true);
+      await generateSessionMemory(activeSession.id, { force });
+      await loadSessionMemories(activeSession.id);
+    } catch (memoryError) {
+      setError(memoryError instanceof Error ? memoryError.message : bridgeOfflineMessage);
     } finally {
-      setIsPreviewLoading(false);
+      setIsGeneratingMemory(false);
     }
-  }
-
-  async function handleSelectFileTreeNode(node: VisibleFileTreeNode) {
-    if (node.kind === "folder") {
-      setCollapsedFolders((current) => {
-        const next = new Set(current);
-
-        if (next.has(node.path)) {
-          next.delete(node.path);
-        } else {
-          next.add(node.path);
-        }
-
-        return next;
-      });
-      return;
-    }
-
-    await openLinkedFile(node.path);
-  }
-
-  function handleMessageLinkClick(event: MouseEvent<HTMLElement>) {
-    const link = (event.target as HTMLElement | null)?.closest("a[data-file-link='true']");
-    if (!link) {
-      return;
-    }
-
-    event.preventDefault();
-    const filePath = link.getAttribute("data-file-path");
-    if (!filePath) {
-      return;
-    }
-
-    void openLinkedFile(filePath);
   }
 
   return (
@@ -227,7 +193,10 @@ export function SessionsClient({ language }: SessionsClientProps) {
                   {workspaces.find((workspace) => workspace.id === activeSession.workspaceId)?.localPath ?? activeSession.workspaceId}
                 </span>
               </div>
-              <h1 className="sessions-header-title">{activeSession.title}</h1>
+              <h1 className="sessions-header-title">
+                {activeSession.title}
+                {isSwitchingSession ? <span className="sessions-switching-indicator">loading</span> : null}
+              </h1>
             </div>
 
             <div className="session-thread">
@@ -238,7 +207,6 @@ export function SessionsClient({ language }: SessionsClientProps) {
                   <div
                     className="thread-item-body"
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
-                    onClick={handleMessageLinkClick}
                   />
                 </article>
               ))}
@@ -253,151 +221,56 @@ export function SessionsClient({ language }: SessionsClientProps) {
         <div className="panel-head">
           <div className="sessions-memory-head">
             <span className="eyebrow">{messages.sessions.memoryCopilot}</span>
+            <div className="memory-automation-actions">
+              <button disabled={!activeSession || isGeneratingMemory} onClick={() => void handleGenerateMemory(false)} type="button">
+                {isGeneratingMemory ? messages.workspace.loading : messages.sessions.saveMemory}
+              </button>
+              <button disabled={!activeSession || isGeneratingMemory} onClick={() => void handleGenerateMemory(true)} type="button">
+                {messages.sessions.regenerate}
+              </button>
+            </div>
           </div>
         </div>
 
         <section className="memory-panel">
           <div className="memory-chat-list">
             <article className="memory-chat-item memory-chat-item-assistant">
-              <div className="memory-chat-role">default shortcut</div>
-              <p>
-                请按照时间线梳理 session 中的对话摘要，保留必要细节，尤其要写清楚涉及到的具体文件。请记录用户做出的决策及其理由，但理由只有在用户明确说出时才记录；如果用户没有明确说明，不要推断。核心关注用户在对话过程中究竟关注什么、不关注什么，并把这些点清楚记录下来。
-              </p>
+              <div className="memory-chat-role">theme</div>
+              <p>{activeSession?.title ?? "current session"}</p>
             </article>
           </div>
 
-          <div className="sessions-files-panel">
-            <div className="workspace-files-panel-head">
-              <span className="eyebrow">{messages.workspace.filesTitle}</span>
-            </div>
-
-            <div className="file-tree">
-              {fileTree ? (
-                visibleFileTree.map((node) => (
-                  <button
-                    className={`file-row ${node.kind === "folder" ? "file-row-folder" : "file-row-file"} ${preview?.path === node.path ? "file-row-active" : ""}`}
-                    key={node.id}
-                    onClick={() => void handleSelectFileTreeNode(node)}
-                    style={{ paddingLeft: `${node.depth * 16 + 8}px` }}
-                    type="button"
-                  >
-                    <span className="file-row-main">
-                      <span className="file-row-label">
-                        <span className="file-row-chevron">
-                          {node.kind === "folder" ? (node.isExpanded ? "▾" : "▸") : "·"}
-                        </span>
-                        <span className={`file-row-icon ${node.kind === "folder" ? "file-row-icon-folder" : "file-row-icon-file"}`}>
-                          {node.kind === "folder" ? "⊟" : "—"}
-                        </span>
-                        <span>{node.name}</span>
-                      </span>
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <div className="workspace-empty">no file tree</div>
-              )}
-            </div>
-
-            <div className="sessions-file-preview">
-              {isPreviewLoading ? <div className="workspace-empty">loading preview...</div> : null}
-              {!isPreviewLoading && preview ? (
-                <>
-                  <div className="file-preview-head sessions-file-preview-head">
-                    <div className="file-preview-meta">
-                      <span className="eyebrow">{preview.name}</span>
-                    </div>
+          {isMemoriesLoading ? <div className="workspace-empty">{messages.workspace.loading}</div> : null}
+          {!isMemoriesLoading && groupedMemories.length === 0 ? (
+            <div className="workspace-empty">no timeline memories yet for this session</div>
+          ) : null}
+          {!isMemoriesLoading
+            ? groupedMemories.map((group) => (
+                <section className="detail-block" key={group.date}>
+                  <h3>{group.date}</h3>
+                  <div className="memory-day-list">
+                    {group.items.map((memory) => (
+                      <article className="memory-day-item" key={memory.id}>
+                        <div className="memory-day-top">
+                          <div className="memory-day-theme">{memory.themeTitle}</div>
+                          <span>{`${memory.checkpointTurnCount} turns`}</span>
+                        </div>
+                        <h4>{memory.title}</h4>
+                        <div
+                          className="thread-item-body"
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.content) }}
+                        />
+                      </article>
+                    ))}
                   </div>
-                  <div className="file-preview-body sessions-file-preview-body" onClick={handleMessageLinkClick}>
-                    {preview.extension === ".md" ? (
-                      <div
-                        className="file-preview-markdown"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(preview.content) }}
-                      />
-                    ) : (
-                      <pre className="file-preview-pre">{preview.content}</pre>
-                    )}
-                  </div>
-                </>
-              ) : null}
-              {!isPreviewLoading && !preview ? <div className="workspace-empty">click a file link to preview it here</div> : null}
-            </div>
-          </div>
+                </section>
+              ))
+            : null}
         </section>
       </aside>
     </section>
   );
 }
-
-function buildVisibleFileTree(node: FileTreeNode | null, collapsedFolders: Set<string>, depth = 0): VisibleFileTreeNode[] {
-  if (!node) {
-    return [];
-  }
-
-  const hasChildren = Boolean(node.children && node.children.length > 0);
-  const isExpanded = node.kind === "folder" && !collapsedFolders.has(node.path);
-  const current: VisibleFileTreeNode = {
-    id: node.id,
-    name: node.name,
-    kind: node.kind,
-    depth,
-    path: node.path,
-    isExpanded,
-    hasChildren,
-  };
-
-  if (node.kind !== "folder" || !isExpanded || !hasChildren) {
-    return [current];
-  }
-
-  return [
-    current,
-    ...(node.children?.flatMap((child) => buildVisibleFileTree(child, collapsedFolders, depth + 1)) ?? []),
-  ];
-}
-
-function createInitialCollapsedFolders(root: FileTreeNode | null) {
-  const collapsed = new Set<string>();
-
-  if (!root?.children) {
-    return collapsed;
-  }
-
-  for (const child of root.children) {
-    collectFolderPaths(child, collapsed);
-  }
-
-  return collapsed;
-}
-
-function collectFolderPaths(node: FileTreeNode, collapsed: Set<string>) {
-  if (node.kind !== "folder") {
-    return;
-  }
-
-  collapsed.add(node.path);
-
-  for (const child of node.children ?? []) {
-    collectFolderPaths(child, collapsed);
-  }
-}
-
-function expandFileAncestors(filePath: string, setCollapsedFolders: Dispatch<SetStateAction<Set<string>>>) {
-  setCollapsedFolders((current) => {
-    const next = new Set(current);
-    const normalized = filePath.replaceAll("\\", "/");
-    const parts = normalized.split("/").filter(Boolean);
-    let currentPath = normalized.startsWith("/") ? "" : parts.shift() ?? "";
-
-    for (const part of parts.slice(0, -1)) {
-      currentPath = currentPath ? `${currentPath}/${part}` : `/${part}`;
-      next.delete(currentPath);
-    }
-
-    return next;
-  });
-}
-
 
 function formatRelativeSessionTime(timestamp: string) {
   const diffMs = Date.now() - new Date(timestamp).getTime();
@@ -428,4 +301,21 @@ function truncateSessionTitle(value: string, maxLength = 10) {
   }
 
   return `${characters.slice(0, maxLength).join("")}...`;
+}
+
+function groupMemoriesByDate(memories: TimelineMemory[]) {
+  const groups = new Map<string, TimelineMemory[]>();
+
+  for (const memory of memories) {
+    const current = groups.get(memory.memoryDate) ?? [];
+    current.push(memory);
+    groups.set(memory.memoryDate, current);
+  }
+
+  return [...groups.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, items]) => ({
+      date,
+      items: items.sort((a, b) => b.checkpointTurnCount - a.checkpointTurnCount),
+    }));
 }

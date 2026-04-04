@@ -1,4 +1,14 @@
-import type { FileTreeNode, RuntimeEvent, Session, TimelineMemory, Workspace } from "@relay/shared-types";
+import type {
+  AutomationRule,
+  FileTreeNode,
+  GoalAutomationRule,
+  GoalAutomationRuleInput,
+  GoalAutomationRunRecord,
+  RuntimeEvent,
+  Session,
+  TimelineMemory,
+  Workspace,
+} from "@relay/shared-types";
 
 import { consumeRuntimeEventStream } from "@/lib/stream/runtime-stream";
 
@@ -23,6 +33,18 @@ type SessionDetailResponse = {
 
 type SessionMemoriesResponse = {
   items: TimelineMemory[];
+};
+
+type AutomationRulesResponse = {
+  items: AutomationRule[];
+};
+
+type GoalAutomationRuleResponse = {
+  item: GoalAutomationRule;
+};
+
+type GoalAutomationRunsResponse = {
+  items: GoalAutomationRunRecord[];
 };
 
 type BridgeRuntimeEvent =
@@ -101,6 +123,49 @@ async function generateSessionMemory(sessionId: string, options?: { force?: bool
 
 async function listMemories() {
   return fetchJson<SessionMemoriesResponse>("/api/bridge/memories");
+}
+
+async function listAutomations() {
+  return fetchJson<AutomationRulesResponse>("/api/bridge/automations");
+}
+
+async function createGoalAutomationRule(input: GoalAutomationRuleInput) {
+  return fetchJson<GoalAutomationRuleResponse>("/api/bridge/automations", {
+    method: "POST",
+    body: JSON.stringify({
+      kind: "goal-loop",
+      ...input,
+    }),
+  });
+}
+
+async function updateGoalAutomationRule(id: string, input: GoalAutomationRuleInput) {
+  return fetchJson<GoalAutomationRuleResponse>(`/api/bridge/automations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+async function deleteAutomationRule(id: string) {
+  return fetchJson<{ ok: boolean }>(`/api/bridge/automations/${id}`, {
+    method: "DELETE",
+  });
+}
+
+async function startAutomationRule(id: string) {
+  return fetchJson<GoalAutomationRuleResponse>(`/api/bridge/automations/${id}/start`, {
+    method: "POST",
+  });
+}
+
+async function stopAutomationRule(id: string) {
+  return fetchJson<GoalAutomationRuleResponse>(`/api/bridge/automations/${id}/stop`, {
+    method: "POST",
+  });
+}
+
+async function listGoalAutomationRuns(id: string, limit = 10) {
+  return fetchJson<GoalAutomationRunsResponse>(`/api/bridge/automations/${id}/runs?limit=${limit}`);
 }
 
 async function listMemoriesByTheme(themeKey: string) {
@@ -214,8 +279,21 @@ function subscribeRuntimeEvents(
   };
 }
 
-async function getFileTree() {
-  return fetchJson<{ item: FileTreeNode; workspaceId: string }>("/api/bridge/files/tree");
+async function getFileTree(options?: { path?: string; depth?: number }) {
+  const searchParams = new URLSearchParams();
+
+  if (options?.path) {
+    searchParams.set("path", options.path);
+  }
+
+  if (typeof options?.depth === "number") {
+    searchParams.set("depth", String(options.depth));
+  }
+
+  const query = searchParams.toString();
+  return fetchJson<{ item: FileTreeNode; workspaceId: string }>(
+    query ? `/api/bridge/files/tree?${query}` : "/api/bridge/files/tree",
+  );
 }
 
 async function getFilePreview(filePath: string) {
@@ -264,6 +342,13 @@ export {
   getSessionMemories,
   generateSessionMemory,
   openInFinder,
+  listAutomations,
+  createGoalAutomationRule,
+  updateGoalAutomationRule,
+  deleteAutomationRule,
+  startAutomationRule,
+  stopAutomationRule,
+  listGoalAutomationRuns,
   listMemories,
   listSessions,
   listMemoriesByDate,

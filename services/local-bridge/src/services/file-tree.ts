@@ -21,6 +21,7 @@ function buildFileTree(rootPath: string, maxDepth = 2): FileTreeNode {
     name,
     kind: "folder",
     path: rootPath,
+    hasChildren: directoryHasVisibleChildren(rootPath),
     children: readChildren(rootPath, 0, maxDepth),
   };
 }
@@ -38,11 +39,24 @@ function readChildren(currentPath: string, depth: number, maxDepth: number): Fil
       const nextPath = path.join(currentPath, entry.name);
 
       if (entry.isDirectory()) {
+        const hasChildren = directoryHasVisibleChildren(nextPath);
+
+        if (depth + 1 >= maxDepth) {
+          return {
+            id: nextPath,
+            name: entry.name,
+            kind: "folder" as const,
+            path: nextPath,
+            hasChildren,
+          };
+        }
+
         return {
           id: nextPath,
           name: entry.name,
           kind: "folder" as const,
           path: nextPath,
+          hasChildren,
           children: readChildren(nextPath, depth + 1, maxDepth),
         };
       }
@@ -54,6 +68,12 @@ function readChildren(currentPath: string, depth: number, maxDepth: number): Fil
         path: nextPath,
       };
     });
+}
+
+function directoryHasVisibleChildren(currentPath: string) {
+  return fs
+    .readdirSync(currentPath, { withFileTypes: true })
+    .some((entry) => entry.name !== ".DS_Store");
 }
 
 export { buildFileTree };

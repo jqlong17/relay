@@ -11,7 +11,7 @@ function renderMarkdown(markdown: string) {
   html = html.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
     (_match, label, href) =>
-      `<a class="thread-link" data-file-link="true" data-file-path="${escapeHtmlAttribute(normalizeLinkedFilePath(href))}" href="${escapeHtmlAttribute(href)}">${label}</a>`,
+      `<button type="button" class="thread-link thread-file-link" data-file-link="true" data-file-path="${escapeHtmlAttribute(normalizeLinkedFilePath(href))}">${label}</button>`,
   );
   html = html.replace(/^### (.*)$/gm, "<h3>$1</h3>");
   html = html.replace(/^## (.*)$/gm, "<h2>$1</h2>");

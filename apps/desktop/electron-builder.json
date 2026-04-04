@@ -1,0 +1,38 @@
+{
+  "appId": "com.relay.desktop",
+  "productName": "Relay",
+  "asar": false,
+  "npmRebuild": false,
+  "directories": {
+    "output": "dist-desktop"
+  },
+  "files": [
+    "apps/desktop/**/*",
+    "apps/web/.next/**/*",
+    "!apps/web/.next/dev/**/*",
+    "!apps/web/.next/cache/**/*",
+    "apps/web/public/**/*",
+    "apps/web/src/app/icon.png",
+    "apps/web/src/app/apple-icon.png",
+    "apps/web/package.json",
+    "services/local-bridge/**/*",
+    "packages/**/*",
+    "relay.ui.toml",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "node_modules/**/*"
+  ],
+  "extraMetadata": {
+    "main": "apps/desktop/main.cjs"
+  },
+  "mac": {
+    "category": "public.app-category.productivity",
+    "icon": "apps/desktop/build/icon.icns",
+    "identity": null,
+    "target": [
+      {
+        "target": "dir"
+      }
+    ]
+  }
+}

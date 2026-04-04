@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { MemoryStore } from "../services/memory-store";
+import { MemoryStore } from "@relay/memory-core";
 import { TimelineMemoryService } from "../services/timeline-memory-service";
 
 async function handleMemoriesRoute(

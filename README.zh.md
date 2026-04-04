@@ -1,173 +1,128 @@
 # Relay
 
-Relay 是一个浏览器中的工作台，用来驱动本地运行的 Codex runtime。
+Relay 是一个基于 Codex CLI 的 Web 端 AI 工作台。
 
-它把本地工作区继续作为执行边界，同时通过 Web 界面暴露 session、文件和运行状态，让你可以在不同设备之间连续地接力工作。
+它不是单纯把终端搬到浏览器里，也不是只做一个聊天窗口。Relay 想解决的是另一类问题：当 AI 对话越来越多、任务越来越长、上下文越来越复杂时，用户需要一个能够持续管理会话、沉淀记忆、安排自动化任务的产品层。
+
+## 我们为什么要做 Relay
+
+很多 AI 对话产品只能解决“当下这一轮”的问题，却很难解决“接下来几天、几周、甚至更长周期”的问题。
+
+真实使用中，用户会遇到几类典型场景：
+
+- 一个任务要持续很多轮对话，后来很难回到真正重要的结论
+- 不同 session 中产生了很多有价值的信息，但没有被整理成长期可用的记忆
+- 用户已经明确了目标，却还需要反复手动提醒 AI 下一步做什么
+- 想在手机、平板、另一台电脑上继续查看或接力当前工作，但原始上下文不够清晰
+
+Relay 的目标，就是把这些分散、短期、容易丢失的 AI 交互，组织成一个可以继续管理、继续积累、继续推进的产品体验。
 
 ## Relay 是什么
 
-Relay 不是托管式 agent runtime，也不只是一个浏览器终端。
+Relay 是一个围绕 AI 对话而展开的产品。
 
-它是覆盖在以下几层之上的一个轻量 Web 层：
+它的核心能力包括：
 
-- 能访问当前活动工作区的本地 bridge 服务
-- 负责 thread 和 turn 的 Codex app server
-- 用于切换工作区、延续 session、查看文件和接收流式输出的浏览器 UI
+- Web 端 AI 对话与工作区续接
+- session 管理与回看
+- 记忆生成与记忆管理
+- 自动化任务定义与长期执行
 
-当前产品结构刻意保持简单：
+你可以把它理解为：在 Codex CLI 的能力之上，增加了一层更适合长期使用的产品界面，让 AI 不只是“回复你”，而是逐渐变成一个可管理、可积累、可持续推进目标的工作系统。
 
-- `workspace`：打开本地目录、浏览文件、查看预览、继续当前 thread
-- `sessions`：查看、重命名、归档并恢复由 Codex 支持的 session
-- `memories`：面向长期记忆工作流的产品界面
-- `readme`：承载明确的项目上下文和 onboarding 信息
+## 产品的几个核心页面
 
-## 当前范围
+### Workspace
 
-这个仓库已经支持核心的本地工作闭环：
+Workspace 是主要工作界面。
 
-- 从 Web UI 打开本地工作区
-- 列出工作区，并记住每个工作区偏好的 session
-- 列出当前工作区对应的 Codex threads
-- 在第一次 runtime turn 之前创建草稿 session
-- 重命名和归档 session
-- 将 Codex 的运行输出流式推送到 Web 客户端
-- 查看当前工作区文件树并预览文件内容
-- 通过独立的移动端路由进行轻量续接
+这里是你继续对话、查看上下文、浏览文件、接着当前任务往下推进的地方。它强调的是“继续做事”，而不是单纯聊天。
 
-其中部分页面已经具备产品形态，但还没有完全接上后端。尤其是 `memories` 页面，目前更接近目标 UX 和信息架构的表达，而不是完整功能。
+### Sessions
 
-## 架构
+Sessions 用来管理会话。
 
-Relay 是一个小型 monorepo，主要分为三层：
+一个 session 不只是历史记录，它也是后续整理、筛选、沉淀长期信息的来源。用户可以从很多 session 中回看重点、找出真正值得留下来的内容。
 
-### 1. Web App
+### Memories
 
-[`apps/web`](/Users/ruska/project/web-cli/apps/web) 是一个 Next.js 应用，负责渲染桌面端和移动端工作台 UI。
+Memories 是 Relay 的一个关键特色。
 
-主要职责：
+Relay 不希望所有有价值的信息都埋在原始对话里。它会把一些重要 session 自动整理成更适合长期理解的记忆，让用户不需要重新翻几十轮、上百轮对话，仍然能快速找回真正重要的目标、决策和上下文。
 
-- 顶层导航和页面骨架
-- workspace、sessions 和 mobile 客户端界面
-- 在服务端和客户端组件中调用本地 bridge
-- 渲染文件预览和 runtime 消息流
+这意味着 Relay 里的“记忆”不是普通收藏夹，也不是简单摘要，而是面向后续继续工作的结构化沉淀。
 
-### 2. Local Bridge
+### Automation
 
-[`services/local-bridge`](/Users/ruska/project/web-cli/services/local-bridge) 是一个 Node HTTP 服务，负责把 Web UI 的操作翻译成本地动作。
+Automation 是 Relay 另一个非常重要的特点。
 
-主要职责：
+很多用户真正需要的不是“让 AI 回答一次”，而是“让 AI 按照我的目标持续做下去”。
 
-- 工作区打开、列出和移除流程
-- 当前活动工作区状态管理
-- 在活动工作区边界内提供文件树和文件内容访问
-- session 创建、重命名、归档和选择
-- 启动并流式转发 Codex turns
+Relay 的自动化能力，面向的就是这种更长周期的任务：
 
-关键路由：
+- 定期检查项目进展
+- 追踪一个持续中的工作目标
+- 反复整理特定类型的对话或结果
+- 让 AI 在未来的某个时间点继续执行同一类任务
 
-- `GET /health`
-- `GET /workspaces`
-- `POST /workspaces/open`
-- `POST /workspaces/open-picker`
-- `GET /sessions`
-- `GET /sessions/:id`
-- `POST /sessions`
-- `POST /sessions/:id/select`
-- `POST /sessions/:id/rename`
-- `POST /sessions/:id/archive`
-- `GET /files/tree`
-- `GET /files/content?path=...`
-- `POST /runtime/run?stream=1`
+自动化让产品从“一次性的对话工具”，变成“可以持续推进目标的系统”。
 
-### 3. Shared Types
+## 记忆为什么重要
 
-[`packages/shared-types`](/Users/ruska/project/web-cli/packages/shared-types) 保存 Web 应用和 bridge 共享的数据契约。
+记忆是 Relay 的产品核心之一。
 
-## Runtime 集成方式
+在长期使用 AI 的过程中，真正稀缺的不是生成一段回答，而是：
 
-Relay 自己并不实现 agent engine。
+- 哪些内容值得留下来
+- 哪些目标会反复出现
+- 用户真正关心什么
+- 过去已经做过哪些判断和决定
 
-bridge 会启动并连接 `codex app-server --listen stdio://`，再把 Codex 的 thread/turn 通知映射成浏览器可消费的 Relay runtime events。
+Relay 会把部分对话整理成记忆，帮助用户从“零散聊天记录”走向“可复用的长期上下文”。
 
-这意味着 Relay 当前默认假设：
+这对长期项目、创作型任务、反复迭代的工作尤其重要。比如绘画、产品设计、内容规划、研究整理，这些都不是一句话就能完成的，而是需要不断累积判断与方向。
 
-- `codex` 已安装并且可通过 `PATH` 访问
-- 本地机器就是实际执行环境
-- 浏览器 UI 是控制与检查界面，而不是工作区事实来源
+## 自动化为什么重要
 
-## 开发
+自动化是 Relay 的另一个产品核心。
 
-### 前置条件
+AI 的价值不只在于即时问答，更在于能否围绕用户目标持续行动。
 
-- Node.js 20+
-- `pnpm`
-- `pm2`
-- `codex` 可通过 `PATH` 访问
+Relay 的自动化能力，希望帮助用户把“今天说过的话”变成“未来还能继续执行的计划”。
 
-安装依赖：
+如果说 session 解决的是“这一次发生了什么”，记忆解决的是“哪些东西值得长期留下”，那么自动化解决的就是“接下来如何继续推进”。
 
-```bash
-pnpm install
-```
+这三者结合起来，才是 Relay 想成为的产品形态：
 
-启动两个服务：
+- session：承载过程
+- memory：沉淀长期价值
+- automation：延长执行周期
 
-```bash
-pnpm dev:up
-```
+## Relay 更适合什么样的场景
 
-这会运行 [`dev-up.sh`](/Users/ruska/project/web-cli/dev-up.sh)，并启动：
+Relay 特别适合这些场景：
 
-- `relay-bridge`：`http://127.0.0.1:4242`
-- `relay-web`：`http://127.0.0.1:3000`
+- 长周期项目协作
+- 多轮创作与修改
+- 绘画、设计、写作等需要持续对话推进的任务
+- 需要从很多 AI 会话中提炼重点的人
+- 希望让 AI 不只是回答，而是持续执行的人
 
-停止两个服务：
+## 我们希望用户如何理解 Relay
 
-```bash
-pnpm dev:down
-```
+Relay 不是一个“再做一个 AI 聊天页”。
 
-常用 `pm2` 命令：
+我们希望用户把它理解为一个围绕 AI 工作流的产品：
 
-```bash
-pm2 ls
-pm2 logs relay-web
-pm2 logs relay-bridge
-pm2 restart relay-web relay-bridge
-pm2 stop relay-web relay-bridge
-```
+- 你可以在这里继续对话
+- 你可以在这里管理 session
+- 你可以在这里生成和维护记忆
+- 你可以在这里定义自动化，让 AI 继续朝着目标推进
 
-进程定义位于 [`ecosystem.config.cjs`](/Users/ruska/project/web-cli/ecosystem.config.cjs)。
+它真正想解决的，是 AI 使用过程中的长期性、连续性和可管理性问题。
 
-## 仓库结构
+## 一句话总结
 
-```text
-.
-├── apps/
-│   └── web/
-├── packages/
-│   └── shared-types/
-├── services/
-│   └── local-bridge/
-├── dev-up.sh
-├── dev-down.sh
-└── ecosystem.config.cjs
-```
+Relay 是一个基于 Codex CLI 的 Web 端 AI 对话、会话管理、记忆生成与管理、自动化执行产品。
 
-## 产品方向
-
-Relay 的目标不是做一个终端壳，而是一个冷静、可检查、可续接的 agent 工作台。
-
-当前产品方向是：
-
-- 让本地工作区继续作为执行事实来源
-- 让 session 可以从任何地方恢复并继续阅读
-- 把文件和变更暴露为一等上下文
-- 同时支持桌面端和移动端续接
-- 为长期记忆和项目上下文层预留空间
-
-## 文档规则
-
-这个文件是仓库级中文 README，和根目录 [`README.md`](/Users/ruska/project/web-cli/README.md) 一起构成 README 内容来源。
-
-如果其他界面需要展示 README，应直接引用或渲染仓库根目录下的文档，而不是再维护一份页面内拷贝。
+它的重点不只是“让 AI 和你说话”，而是“让 AI 的对话变成可沉淀、可管理、可持续推进目标的工作系统”。

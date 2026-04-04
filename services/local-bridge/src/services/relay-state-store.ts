@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { Session, Workspace } from "@relay/shared-types";
+import type { GoalAutomationRuleDefinition, GoalAutomationRunState, Session, Workspace } from "@relay/shared-types";
 
 type SessionListSnapshot = {
   items: Session[];
@@ -10,6 +10,8 @@ type SessionListSnapshot = {
 };
 
 type RelayBridgeState = {
+  internalAutomationRulesByWorkspaceId: Record<string, GoalAutomationRuleDefinition[]>;
+  internalAutomationRunStatesByRuleId: Record<string, GoalAutomationRunState>;
   preferredSessionIdsByWorkspaceId: Record<string, string>;
   sessionDetailsBySessionId: Record<string, Session>;
   sessionListsByWorkspaceId: Record<string, SessionListSnapshot>;
@@ -17,6 +19,8 @@ type RelayBridgeState = {
 };
 
 const DEFAULT_STATE: RelayBridgeState = {
+  internalAutomationRulesByWorkspaceId: {},
+  internalAutomationRunStatesByRuleId: {},
   preferredSessionIdsByWorkspaceId: {},
   sessionDetailsBySessionId: {},
   sessionListsByWorkspaceId: {},
@@ -34,6 +38,77 @@ class RelayStateStore {
 
   getWorkspaces() {
     return this.state.workspaces;
+  }
+
+  listInternalAutomationRules(workspaceId: string) {
+    return this.state.internalAutomationRulesByWorkspaceId[workspaceId] ?? [];
+  }
+
+  saveInternalAutomationRule(rule: GoalAutomationRuleDefinition) {
+    const currentRules = this.state.internalAutomationRulesByWorkspaceId[rule.workspaceId] ?? [];
+    const nextRules = currentRules.filter((item) => item.id !== rule.id);
+
+    nextRules.push(rule);
+    nextRules.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+    this.state.internalAutomationRulesByWorkspaceId[rule.workspaceId] = nextRules;
+    this.writeState();
+  }
+
+  getInternalAutomationRule(ruleId: string) {
+    for (const rules of Object.values(this.state.internalAutomationRulesByWorkspaceId)) {
+      const match = rules.find((item) => item.id === ruleId);
+      if (match) {
+        return match;
+      }
+    }
+
+    return null;
+  }
+
+  deleteInternalAutomationRule(ruleId: string) {
+    let hasChanges = false;
+
+    for (const [workspaceId, rules] of Object.entries(this.state.internalAutomationRulesByWorkspaceId)) {
+      const nextRules = rules.filter((item) => item.id !== ruleId);
+      if (nextRules.length === rules.length) {
+        continue;
+      }
+
+      if (nextRules.length === 0) {
+        delete this.state.internalAutomationRulesByWorkspaceId[workspaceId];
+      } else {
+        this.state.internalAutomationRulesByWorkspaceId[workspaceId] = nextRules;
+      }
+      hasChanges = true;
+    }
+
+    if (this.state.internalAutomationRunStatesByRuleId[ruleId]) {
+      delete this.state.internalAutomationRunStatesByRuleId[ruleId];
+      hasChanges = true;
+    }
+
+    if (hasChanges) {
+      this.writeState();
+    }
+  }
+
+  getInternalAutomationRunState(ruleId: string) {
+    return this.state.internalAutomationRunStatesByRuleId[ruleId] ?? null;
+  }
+
+  saveInternalAutomationRunState(runState: GoalAutomationRunState) {
+    this.state.internalAutomationRunStatesByRuleId[runState.ruleId] = runState;
+    this.writeState();
+  }
+
+  clearInternalAutomationRunState(ruleId: string) {
+    if (!this.state.internalAutomationRunStatesByRuleId[ruleId]) {
+      return;
+    }
+
+    delete this.state.internalAutomationRunStatesByRuleId[ruleId];
+    this.writeState();
   }
 
   saveWorkspaces(workspaces: Workspace[]) {
@@ -161,6 +236,34 @@ class RelayStateStore {
     }
   }
 
+  pruneInternalAutomationState(validWorkspaceIds: Set<string>) {
+    let hasChanges = false;
+    const validRuleIds = new Set<string>();
+
+    for (const workspaceId of Object.keys(this.state.internalAutomationRulesByWorkspaceId)) {
+      if (!validWorkspaceIds.has(workspaceId)) {
+        delete this.state.internalAutomationRulesByWorkspaceId[workspaceId];
+        hasChanges = true;
+        continue;
+      }
+
+      for (const rule of this.state.internalAutomationRulesByWorkspaceId[workspaceId] ?? []) {
+        validRuleIds.add(rule.id);
+      }
+    }
+
+    for (const ruleId of Object.keys(this.state.internalAutomationRunStatesByRuleId)) {
+      if (!validRuleIds.has(ruleId)) {
+        delete this.state.internalAutomationRunStatesByRuleId[ruleId];
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges) {
+      this.writeState();
+    }
+  }
+
   private readState() {
     try {
       if (!fs.existsSync(this.filePath)) {
@@ -171,6 +274,8 @@ class RelayStateStore {
       const parsed = JSON.parse(raw) as Partial<RelayBridgeState>;
 
       return {
+        internalAutomationRulesByWorkspaceId: parsed.internalAutomationRulesByWorkspaceId ?? {},
+        internalAutomationRunStatesByRuleId: parsed.internalAutomationRunStatesByRuleId ?? {},
         preferredSessionIdsByWorkspaceId: parsed.preferredSessionIdsByWorkspaceId ?? {},
         sessionDetailsBySessionId: parsed.sessionDetailsBySessionId ?? {},
         sessionListsByWorkspaceId: parsed.sessionListsByWorkspaceId ?? {},

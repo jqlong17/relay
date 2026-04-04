@@ -5,6 +5,27 @@
 # 全局界面语言：zh / en
 language = "zh"
 
+# 全局主题：dark / light
+theme = "dark"
+
+# 界面密度：compact / comfortable
+# compact = 当前默认的紧凑布局
+# comfortable = 更大的字号、更松的间距
+density = "compact"
+
+[font]
+# UI 正文字体
+# 可选：source-sans-3 / ibm-plex-sans
+ui = "source-sans-3"
+
+# 等宽字体
+# 可选：jetbrains-mono / ibm-plex-mono
+mono = "jetbrains-mono"
+
+# 中文字体
+# 可选：noto-sans-sc
+cjk = "noto-sans-sc"
+
 [layout]
 # 顶部导航栏高度
 topbarHeight = "40px"

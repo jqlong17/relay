@@ -69,6 +69,7 @@ type VisibleFileTreeNode = {
   path: string;
   isExpanded: boolean;
   hasChildren: boolean;
+  isLoaded: boolean;
 };
 
 type SessionContextMenuState = {
@@ -79,7 +80,7 @@ type SessionContextMenuState = {
 
 type LoadedSessionDetail = Awaited<ReturnType<typeof getSession>>;
 
-type WorkspaceSidePanelMode = "files" | "summary" | "actions";
+type WorkspaceSidePanelMode = "files" | "summary" | "actions" | "automation";
 
 type WorkspaceResizeHandle = "left" | "right" | "sidepanel";
 
@@ -136,7 +137,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [sessionMemories, setSessionMemories] = useState<TimelineMemory[]>([]);
   const [allMemories, setAllMemories] = useState<TimelineMemory[]>([]);
-  const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(false);
+  const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(true);
   const [sidePanelMode, setSidePanelMode] = useState<WorkspaceSidePanelMode>("summary");
   const [archiveCandidate, setArchiveCandidate] = useState<Session | null>(null);
   const [renameCandidate, setRenameCandidate] = useState<Session | null>(null);
@@ -149,6 +150,9 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const [selectedMentions, setSelectedMentions] = useState<MentionCandidate[]>([]);
   const [mentionQuery, setMentionQuery] = useState<MentionQueryState | null>(null);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [isTimelinePinned, setIsTimelinePinned] = useState(true);
+  const [hasUnreadLatestReply, setHasUnreadLatestReply] = useState(false);
   const [layoutWidths, setLayoutWidths] = useState<WorkspaceLayoutWidths>({
     left: null,
     right: null,
@@ -166,6 +170,9 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const sessionCacheRef = useRef(new Map<string, Session>());
   const pendingSessionRequestsRef = useRef(new Map<string, Promise<LoadedSessionDetail>>());
   const activeSessionIdRef = useRef<string | null>(null);
+  const highlightResetTimeoutRef = useRef<number | null>(null);
+  const isTimelinePinnedRef = useRef(true);
+  const previousActiveSessionIdRef = useRef<string | null>(null);
   const sessionSelectionRequestIdRef = useRef(0);
   const dragStateRef = useRef<{
     handle: WorkspaceResizeHandle;
@@ -205,6 +212,10 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   );
   const actionPrompts = useMemo(
     () => createWorkspaceActionPrompts(activeSession, linkedFiles, language),
+    [activeSession, language, linkedFiles],
+  );
+  const automationPrompt = useMemo(
+    () => createWorkspaceAutomationPrompt(activeSession, linkedFiles, language),
     [activeSession, language, linkedFiles],
   );
   const groupedSessionMemories = useMemo(() => groupMemoriesByDate(sessionMemories), [sessionMemories]);
@@ -570,15 +581,55 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       return;
     }
 
+    const shouldForceLatest = previousActiveSessionIdRef.current !== activeSession.id;
+    previousActiveSessionIdRef.current = activeSession.id;
+
     const frameId = window.requestAnimationFrame(() => {
-      currentMessageRef.current?.scrollIntoView({
-        behavior: "auto",
-        block: "end",
-      });
+      if (shouldForceLatest || isTimelinePinnedRef.current) {
+        scrollTimelineToLatest(shouldForceLatest ? "auto" : "auto");
+        setHasUnreadLatestReply(false);
+        return;
+      }
+
+      setHasUnreadLatestReply(true);
     });
 
     return () => window.cancelAnimationFrame(frameId);
   }, [activeSession?.id, activeSession?.messages.length, isActiveSessionLoading, isSwitchingSession]);
+
+  useEffect(() => {
+    const timeline = timelineRef.current;
+    if (!timeline) {
+      return;
+    }
+
+    const handleScroll = () => {
+      const pinned = isTimelineNearBottom(timeline);
+      isTimelinePinnedRef.current = pinned;
+      setIsTimelinePinned(pinned);
+
+      if (pinned) {
+        setHasUnreadLatestReply(false);
+      }
+    };
+
+    handleScroll();
+    timeline.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      timeline.removeEventListener("scroll", handleScroll);
+    };
+  }, [activeSession?.id, activeSession?.messages.length]);
+
+  useEffect(() => {
+    const input = composerInputRef.current;
+    if (!input) {
+      return;
+    }
+
+    input.style.height = "0px";
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  }, [composerValue]);
 
   useEffect(() => {
     if (!mentionQuery) {
@@ -648,7 +699,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         });
         await loadSessionMemories(sessionId);
         setIsActiveSessionLoading(false);
-        scrollTimelineToLatest();
+        jumpTimelineToLatest();
         return;
       }
 
@@ -659,7 +710,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         });
         await loadSessionMemories(sessionId);
         setIsActiveSessionLoading(false);
-        scrollTimelineToLatest();
+        jumpTimelineToLatest();
       }
 
       if (sessionDetail.source === "snapshot") {
@@ -684,6 +735,19 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     setSidePanelMode("files");
 
     if (node.kind === "folder") {
+      const shouldExpand = collapsedFolders.has(node.path);
+
+      if (shouldExpand && node.hasChildren && !node.isLoaded) {
+        try {
+          setError(null);
+          const subtree = await getFileTree({ path: node.path, depth: 2 });
+          setFileTree((current) => mergeFileTreeNode(current, subtree.item));
+        } catch (treeError) {
+          setError(treeError instanceof Error ? treeError.message : bridgeOfflineMessage);
+          return;
+        }
+      }
+
       setCollapsedFolders((current) => {
         const next = new Set(current);
 
@@ -730,7 +794,14 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   }, [bridgeOfflineMessage]);
 
   const handleMarkdownLinkClick = useCallback((event: MouseEvent<HTMLElement>) => {
-    const link = (event.target as HTMLElement | null)?.closest("a[data-file-link='true']");
+    const target = event.target;
+    const element =
+      target instanceof Element
+        ? target
+        : target instanceof Node
+          ? target.parentElement
+          : null;
+    const link = element?.closest("[data-file-link='true']");
     if (!link) {
       return;
     }
@@ -995,17 +1066,37 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   }
 
   function scrollToCurrentMessage(behavior: ScrollBehavior) {
-    currentMessageRef.current?.scrollIntoView({
-      behavior,
-      block: "nearest",
-    });
+    scrollTimelineToLatest(behavior);
+
+    const lastMessageId = activeSession?.messages.at(-1)?.id ?? null;
+    pulseMessageHighlight(lastMessageId);
   }
 
   function scrollToFirstMessage(behavior: ScrollBehavior) {
     firstMessageRef.current?.scrollIntoView({
       behavior,
-      block: "nearest",
+      block: "start",
     });
+
+    const firstMessageId = activeSession?.messages[0]?.id ?? null;
+    pulseMessageHighlight(firstMessageId);
+  }
+
+  function pulseMessageHighlight(messageId: string | null) {
+    if (!messageId) {
+      return;
+    }
+
+    setHighlightedMessageId(messageId);
+
+    if (highlightResetTimeoutRef.current !== null) {
+      window.clearTimeout(highlightResetTimeoutRef.current);
+    }
+
+    highlightResetTimeoutRef.current = window.setTimeout(() => {
+      setHighlightedMessageId((current) => (current === messageId ? null : current));
+      highlightResetTimeoutRef.current = null;
+    }, 1400);
   }
 
   async function handleComposerPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
@@ -1038,12 +1129,27 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     setAttachments((current) => current.filter((attachment) => attachment.path !== attachmentPath));
   }
 
-  function scrollTimelineToLatest() {
+  function jumpTimelineToLatest() {
+    scrollTimelineToLatest("auto");
+  }
+
+  function scrollTimelineToLatest(behavior: ScrollBehavior) {
     requestAnimationFrame(() => {
-      currentMessageRef.current?.scrollIntoView({
-        behavior: "auto",
-        block: "end",
-      });
+      const timeline = timelineRef.current;
+      if (!timeline) {
+        return;
+      }
+
+      const top = timeline.scrollHeight;
+      if (typeof timeline.scrollTo === "function") {
+        timeline.scrollTo({ top, behavior });
+      } else {
+        timeline.scrollTop = top;
+      }
+
+      isTimelinePinnedRef.current = true;
+      setIsTimelinePinned(true);
+      setHasUnreadLatestReply(false);
     });
   }
 
@@ -1199,7 +1305,12 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
       <section className="panel panel-center workspace-center">
         <div className="workspace-header">
-          <span className="eyebrow">{messages.workspace.eyebrow}</span>
+          <div className="workspace-header-meta">
+            <span className="eyebrow">{messages.workspace.eyebrow}</span>
+            <span className={`workspace-sync-indicator ${hasUnreadLatestReply ? "workspace-sync-indicator-unread" : ""}`}>
+              {hasUnreadLatestReply ? messages.workspace.unreadReplies : messages.workspace.syncedLatest}
+            </span>
+          </div>
           <div className="workspace-header-actions">
             <button className="workspace-header-link" onClick={() => scrollToFirstMessage("smooth")} type="button">
               {messages.workspace.earliestMessage}
@@ -1207,6 +1318,11 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
             <button className="workspace-header-link" onClick={() => scrollToCurrentMessage("smooth")} type="button">
               {messages.workspace.latestMessage}
             </button>
+            {isSidePanelCollapsed ? (
+              <button className="workspace-header-link" onClick={() => setIsSidePanelCollapsed(false)} type="button">
+                {messages.workspace.expand}
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -1216,11 +1332,20 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
           {!error && isActiveSessionLoading && !isSwitchingSession ? (
             <div className="workspace-empty">{messages.workspace.loading}</div>
           ) : null}
+          {!error && !isLoading && workspaces.length === 0 ? (
+            <div className="workspace-center-empty" aria-hidden="true">
+              <div className="workspace-center-empty-copy">
+                <p className="workspace-center-empty-title">{messages.workspace.noWorkspacePrompt}</p>
+                <p className="workspace-center-empty-body">{messages.workspace.noWorkspaceHint}</p>
+              </div>
+            </div>
+          ) : null}
           {!error && activeSession?.messages.length === 0 ? (
             <div className="workspace-empty">{messages.workspace.noMessages}</div>
           ) : null}
           {activeSession?.messages.map((item, index, items) => (
             <TimelineMessage
+              isHighlighted={highlightedMessageId === item.id}
               isCurrent={index === items.length - 1}
               key={item.id}
               message={item}
@@ -1229,6 +1354,15 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
             />
           ))}
         </div>
+        {hasUnreadLatestReply && !isTimelinePinned ? (
+          <button
+            className="workspace-latest-reply-toast"
+            onClick={() => scrollToCurrentMessage("smooth")}
+            type="button"
+          >
+            {messages.workspace.newReplies}
+          </button>
+        ) : null}
 
         <div className="composer">
           <div className="composer-prompt">relay &gt;</div>
@@ -1339,21 +1473,12 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
             onClick={() => void handleRun()}
             type="button"
           >
-            {isRunning ? messages.workspace.loading : messages.common.run}
+            {isRunning ? messages.workspace.loading : messages.workspace.send}
           </button>
         </div>
       </section>
 
-      {isSidePanelCollapsed ? (
-        <button
-          className="workspace-sidepanel-rail"
-          onClick={() => setIsSidePanelCollapsed(false)}
-          type="button"
-        >
-          <span className="workspace-sidepanel-rail-arrow" aria-hidden="true">‹</span>
-          <span className="workspace-sidepanel-rail-label">{messages.workspace.contextTitle}</span>
-        </button>
-      ) : (
+      {isSidePanelCollapsed ? null : (
         <aside className="panel panel-right workspace-sidepanel" ref={rightPanelRef}>
           <button
             aria-label="Resize right panel"
@@ -1362,12 +1487,6 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
             type="button"
           />
           <div className="panel-head workspace-sidepanel-head">
-            <div className="workspace-sidepanel-head-meta">
-              <span className="eyebrow">{messages.workspace.contextTitle}</span>
-              <span className="workspace-sidepanel-head-detail">
-                {getSidePanelModeLabel(sidePanelMode, messages)}
-              </span>
-            </div>
             <button
               className="workspace-sidepanel-toggle"
               onClick={() => setIsSidePanelCollapsed(true)}
@@ -1378,7 +1497,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
           </div>
 
           <div className="workspace-sidepanel-tabs" role="tablist" aria-label={messages.workspace.sidePanelAriaLabel}>
-            {(["summary", "files", "actions"] as WorkspaceSidePanelMode[]).map((mode) => (
+            {(["summary", "files", "actions", "automation"] as WorkspaceSidePanelMode[]).map((mode) => (
               <button
                 aria-selected={sidePanelMode === mode}
                 className={`workspace-sidepanel-tab ${sidePanelMode === mode ? "workspace-sidepanel-tab-active" : ""}`}
@@ -1578,6 +1697,52 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
               </section>
             </div>
           ) : null}
+
+          {sidePanelMode === "automation" ? (
+            <div className="workspace-sidepanel-body workspace-sidepanel-scroll">
+              <section className="workspace-sidepanel-section">
+                <div className="workspace-sidepanel-subhead">
+                  <span className="eyebrow">{messages.workspace.automationTab}</span>
+                  <span className="workspace-sidepanel-subhead-detail">{activeSession ? 2 : 1}</span>
+                </div>
+                <div className="workspace-actions-list">
+                  {activeSession ? (
+                    <button
+                      className="workspace-action-card"
+                      onClick={() => {
+                        const target = new URL("/automation", window.location.origin);
+                        target.searchParams.set("mode", "create-goal");
+                        target.searchParams.set("sessionId", activeSession.id);
+                        target.searchParams.set("sessionTitle", activeSession.title);
+                        window.location.assign(target.toString());
+                      }}
+                      type="button"
+                    >
+                      <strong>{language === "zh" ? "为当前会话创建目标自动推进" : "Create goal automation for this session"}</strong>
+                      <p>
+                        {language === "zh"
+                          ? "自动绑定当前 session，让 Relay 围绕目标自动多轮推进，直到完成或触发兜底停止条件。"
+                          : "Bind the current session and let Relay continue multi-turn progress toward a goal until it completes or hits a safety stop."}
+                      </p>
+                    </button>
+                  ) : null}
+                  <button
+                    className="workspace-action-card"
+                    onClick={() => {
+                      setComposerValue(automationPrompt.prompt);
+                      queueMicrotask(() => {
+                        composerInputRef.current?.focus();
+                      });
+                    }}
+                    type="button"
+                  >
+                    <strong>{automationPrompt.title}</strong>
+                    <p>{automationPrompt.description}</p>
+                  </button>
+                </div>
+              </section>
+            </div>
+          ) : null}
         </aside>
       )}
 
@@ -1681,6 +1846,11 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   );
 }
 
+function isTimelineNearBottom(element: HTMLDivElement, threshold = 32) {
+  const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return remaining <= threshold;
+}
+
 function createOptimisticMessage(
   sessionId: string,
   role: Message["role"],
@@ -1718,11 +1888,18 @@ function createClientMessageId(role: Message["role"]) {
 }
 
 const TimelineMessage = memo(
-  forwardRef<HTMLElement, TimelineMessageProps>(function TimelineMessage({ isCurrent, message, onLinkClick }, ref) {
+  forwardRef<HTMLElement, TimelineMessageProps>(function TimelineMessage(
+    { isCurrent, isHighlighted, message, onLinkClick },
+    ref,
+  ) {
     const html = useMemo(() => renderMarkdown(message.content), [message.content]);
 
     return (
-      <article className={`workspace-log-item workspace-log-item-${message.role}`} ref={isCurrent ? ref : null}>
+      <article
+        className={`workspace-log-item workspace-log-item-${message.role} ${isHighlighted ? "workspace-log-item-highlighted" : ""}`}
+        data-message-id={message.id}
+        ref={ref}
+      >
         <div className="workspace-log-top">
           <span className="workspace-log-label">{message.role}</span>
           <span className="workspace-log-detail">{formatMessageTime(message.createdAt)}</span>
@@ -1732,12 +1909,14 @@ const TimelineMessage = memo(
     );
   }),
   (previous, next) =>
+    previous.isHighlighted === next.isHighlighted &&
     previous.isCurrent === next.isCurrent &&
     previous.message === next.message &&
     previous.onLinkClick === next.onLinkClick,
 );
 
 type TimelineMessageProps = {
+  isHighlighted: boolean;
   isCurrent: boolean;
   message: Message;
   onLinkClick: (event: MouseEvent<HTMLElement>) => void;
@@ -1954,6 +2133,7 @@ function buildVisibleFileTree(
   }
 
   const hasChildren = Boolean(node.children && node.children.length > 0);
+  const canExpand = node.kind === "folder" && (node.hasChildren ?? hasChildren);
   const isExpanded = node.kind === "folder" && !collapsedFolders.has(node.path);
   const current: VisibleFileTreeNode = {
     id: node.id,
@@ -1962,10 +2142,11 @@ function buildVisibleFileTree(
     depth,
     path: node.path,
     isExpanded,
-    hasChildren,
+    hasChildren: canExpand,
+    isLoaded: isFileTreeFolderLoaded(node),
   };
 
-  if (node.kind !== "folder" || !isExpanded || !hasChildren) {
+  if (node.kind !== "folder" || !isExpanded || !current.hasChildren) {
     return [current];
   }
 
@@ -1973,6 +2154,25 @@ function buildVisibleFileTree(
     current,
     ...(node.children?.flatMap((child) => buildVisibleFileTree(child, collapsedFolders, depth + 1)) ?? []),
   ];
+}
+
+function mergeFileTreeNode(current: FileTreeNode | null, subtree: FileTreeNode): FileTreeNode | null {
+  if (!current) {
+    return subtree;
+  }
+
+  if (current.path === subtree.path) {
+    return subtree;
+  }
+
+  if (!current.children || current.children.length === 0) {
+    return current;
+  }
+
+  return {
+    ...current,
+    children: current.children.map((child) => mergeFileTreeNode(child, subtree) ?? child),
+  };
 }
 
 function createInitialCollapsedFolders(root: FileTreeNode | null) {
@@ -1987,6 +2187,22 @@ function createInitialCollapsedFolders(root: FileTreeNode | null) {
   }
 
   return collapsed;
+}
+
+function isFileTreeFolderLoaded(node: FileTreeNode) {
+  if (node.kind !== "folder") {
+    return true;
+  }
+
+  if (!Array.isArray(node.children)) {
+    return false;
+  }
+
+  if (node.children.length > 0) {
+    return true;
+  }
+
+  return node.hasChildren === false;
 }
 
 function collectFolderPaths(node: FileTreeNode, collapsed: Set<string>) {
@@ -2193,51 +2409,123 @@ function createWorkspaceActionPrompts(session: Session | null, linkedFiles: stri
       ? `当前 session 标题：${session.title}。`
       : `Current session title: ${session.title}.`
     : "";
+  const recentPreferenceContext = createRecentPreferenceContext(session, language);
 
   return [
     {
       title: isZh ? "时间线记忆" : "timeline memory",
       description: isZh
-        ? "按时间线梳理摘要，合并用户决策与关注点地图，形成一条完整记忆。"
-        : "Create a single timeline memory with summary, user decisions, and focus map.",
+        ? "按明确时间点梳理变化，合并用户决策与关注点地图，形成一条完整记忆。"
+        : "Create one timeline memory that preserves concrete time points, decisions, and focus map.",
       prompt: isZh
-        ? `请整理这个 session 的时间线记忆：按时间线梳理对话摘要，保留必要细节和具体文件；提取用户明确做出的决策和理由，若理由未明说就不要补；识别用户真正关注什么、不关注什么。${sessionTitle}${referencedFiles}`.trim()
-        : `Please create a timeline memory for this session: summarize the conversation as a timeline with concrete file details, extract only explicit user decisions and stated reasons, and identify what the user truly cared about or did not care about. ${sessionTitle}${referencedFiles}`.trim(),
+        ? `请整理这个 session 的时间线记忆：必须严格按记录中的时间点梳理变化，明确写出每个关键变化发生在什么时间，不能丢失时间信息，也不要把不同时间点的内容混在一起；按时间线梳理对话摘要，保留必要细节和具体文件；提取用户明确做出的决策和理由，若理由未明说就不要补；识别用户真正关注什么、不关注什么。${sessionTitle}${referencedFiles}`.trim()
+        : `Please create a timeline memory for this session: you must preserve the concrete recorded time points for each important change, explicitly state when each change happened, never drop time information, and do not merge content from different time points together; summarize the conversation as a timeline with concrete file details, extract only explicit user decisions and stated reasons, and identify what the user truly cared about or did not care about. ${sessionTitle}${referencedFiles}`.trim(),
     },
     {
-      title: isZh ? "自动化" : "automation",
+      title: isZh ? "记录用户偏好" : "capture user preferences",
       description: isZh
-        ? "为当前工作区或当前会话设计一个可重复执行的自动化任务。"
-        : "Design a repeatable automation for the current workspace or session.",
+        ? "基于最近 3 轮对话识别用户偏好，整理为可复用记忆。"
+        : "Identify user preferences from the latest 3 turns and turn them into reusable memory.",
       prompt: isZh
         ? [
-            "请基于当前上下文帮我设计一个 Codex 自动化。",
+            "请将最近 3 轮对话处理为一条“用户偏好记忆”。",
             sessionTitle,
             referencedFiles,
-            "请先给出一个最小可用方案，内容包括：",
-            "1. 这个自动化应该做什么",
-            "2. 适合的触发方式（按时间 / 按轮次 / 按关键词）",
-            "3. 建议的名称",
-            "4. 推荐的执行频率",
-            "5. 一段可以直接用于创建 automation 的 prompt",
-          ]
-            .filter(Boolean)
-            .join("\n")
+            "请明确写出：",
+            "1. 当前所处的场景或环境信息",
+            "2. 用户是针对什么对象或问题表达偏好",
+            "3. 用户表达了什么偏好、约束、取舍或反感点",
+            "4. 若偏好只在特定场景成立，请明确标注适用范围",
+            "5. 不要补充用户没有明确表达的长期偏好",
+            recentPreferenceContext,
+          ].filter(Boolean).join("\n")
         : [
-            "Please design a Codex automation based on the current context.",
+            "Please turn the latest 3 turns into a reusable user-preference memory.",
             sessionTitle,
             referencedFiles,
-            "Start with a minimum viable setup and include:",
-            "1. what the automation should do",
-            "2. the best trigger mode (schedule / turn-based / keyword-based)",
-            "3. a suggested short name",
-            "4. a recommended run frequency",
-            "5. a prompt that can be used directly to create the automation",
-          ]
-            .filter(Boolean)
-            .join("\n"),
+            "Make sure to state:",
+            "1. The current scene or environment",
+            "2. What object, workflow, or problem the preference refers to",
+            "3. The specific preference, constraint, tradeoff, or dislike the user expressed",
+            "4. The scope if the preference only applies in a specific context",
+            "5. Do not invent durable preferences the user did not explicitly express",
+            recentPreferenceContext,
+          ].filter(Boolean).join("\n"),
     },
   ];
+}
+
+function createRecentPreferenceContext(session: Session | null, language: AppLanguage) {
+  if (!session) {
+    return "";
+  }
+
+  const isZh = language === "zh";
+  const recentMessages = session.messages.slice(-6);
+  if (recentMessages.length === 0) {
+    return "";
+  }
+
+  const header = isZh ? "最近 3 轮对话参考：" : "Latest 3-turn reference:";
+  const lines = recentMessages.map((message, index) => {
+    const roleLabel = message.role === "user"
+      ? (isZh ? "用户" : "user")
+      : message.role === "assistant"
+        ? (isZh ? "助手" : "assistant")
+        : (isZh ? "系统" : "system");
+
+    return `${index + 1}. ${roleLabel}: ${summarizeMessageContent(message.content, 240)}`;
+  });
+
+  return [header, ...lines].join("\n");
+}
+
+function createWorkspaceAutomationPrompt(session: Session | null, linkedFiles: string[], language: AppLanguage) {
+  const isZh = language === "zh";
+  const referencedFiles = linkedFiles.length > 0
+    ? isZh
+      ? `涉及文件包括：${linkedFiles.join("、")}。`
+      : `Referenced files include: ${linkedFiles.join(", ")}.`
+    : "";
+  const sessionTitle = session?.title
+    ? isZh
+      ? `当前 session 标题：${session.title}。`
+      : `Current session title: ${session.title}.`
+    : "";
+
+  return {
+    title: isZh ? "自动化" : "automation",
+    description: isZh
+      ? "为当前工作区或当前会话设计一个可重复执行的自动化任务。"
+      : "Design a repeatable automation for the current workspace or session.",
+    prompt: isZh
+      ? [
+          "请基于当前上下文帮我设计一个 Codex 自动化。",
+          sessionTitle,
+          referencedFiles,
+          "请先给出一个最小可用方案，内容包括：",
+          "1. 这个自动化应该做什么",
+          "2. 适合的触发方式（按时间 / 按轮次 / 按关键词）",
+          "3. 建议的名称",
+          "4. 推荐的执行频率",
+          "5. 一段可以直接用于创建 automation 的 prompt",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          "Please design a Codex automation based on the current context.",
+          sessionTitle,
+          referencedFiles,
+          "Start with a minimum viable setup and include:",
+          "1. what the automation should do",
+          "2. the best trigger mode (schedule / turn-based / keyword-based)",
+          "3. a suggested short name",
+          "4. a recommended run frequency",
+          "5. a prompt that can be used directly to create the automation",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+  };
 }
 
 function findActiveMentionQuery(value: string, cursor: number) {
@@ -2379,6 +2667,10 @@ function getSidePanelModeLabel(mode: WorkspaceSidePanelMode, messages: ReturnTyp
 
   if (mode === "summary") {
     return messages.workspace.summaryTab;
+  }
+
+  if (mode === "automation") {
+    return messages.workspace.automationTab;
   }
 
   return messages.workspace.actionsTab;

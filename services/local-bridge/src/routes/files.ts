@@ -28,6 +28,42 @@ async function handleFilesRoute(
     return true;
   }
 
+  if (request.method === "GET" && request.url?.startsWith("/files/tree?")) {
+    const activeWorkspace = workspaceStore.getActive();
+
+    if (!activeWorkspace) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "No active workspace" }));
+      return true;
+    }
+
+    const requestUrl = new URL(request.url, "http://127.0.0.1");
+    const requestedPath = requestUrl.searchParams.get("path");
+    const depthParam = Number.parseInt(requestUrl.searchParams.get("depth") ?? "2", 10);
+    const depth = Number.isFinite(depthParam) ? Math.min(Math.max(depthParam, 1), 4) : 2;
+
+    let targetPath = activeWorkspace.localPath;
+
+    if (requestedPath) {
+      try {
+        targetPath = resolveWorkspacePath(activeWorkspace.localPath, requestedPath);
+      } catch (error) {
+        response.writeHead(403, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: error instanceof Error ? error.message : "Path is outside the active workspace",
+          }),
+        );
+        return true;
+      }
+    }
+
+    const tree = buildFileTree(targetPath, depth);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ item: tree, workspaceId: activeWorkspace.id }));
+    return true;
+  }
+
   if (request.method === "GET" && request.url?.startsWith("/files/content")) {
     const activeWorkspace = workspaceStore.getActive();
 

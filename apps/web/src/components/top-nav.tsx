@@ -19,9 +19,10 @@ export function TopNav({ language }: TopNavProps) {
   const pendingNavigationRef = useRef<{ href: string; startedAt: number } | null>(null);
   const navItems = useMemo(
     () => [
-      { key: "workspace", href: "/", label: messages.nav.workspace },
+      { key: "workspace", href: "/workspace", label: messages.nav.workspace },
       { key: "sessions", href: "/sessions", label: messages.nav.sessions },
       { key: "memories", href: "/memories", label: messages.nav.memories },
+      { key: "automation", href: "/automation", label: messages.nav.automation },
       { key: "readme", href: "/readme", label: messages.nav.readme },
       { key: "settings", href: "/settings", label: messages.nav.settings },
     ],
