@@ -7,6 +7,7 @@ import type { TimelineMemory } from "@relay/shared-types";
 import { getMessages } from "@/config/messages";
 import type { AppLanguage } from "@/config/ui.config";
 import { getFilePreview, listMemories } from "@/lib/api/bridge";
+import { buildCalendarMonths, buildSelectableYears, getCalendarLevelClass, groupMemoriesByDate } from "@/lib/memories";
 import type { FilePreview } from "@/lib/api/bridge";
 import { renderMarkdown } from "@/lib/markdown";
 
@@ -15,8 +16,6 @@ type MemoriesPageClientProps = {
 };
 
 type MemoriesViewMode = "date" | "theme";
-const EARLIEST_MEMORY_YEAR = 2015;
-
 export function MemoriesPageClient({ language }: MemoriesPageClientProps) {
   const messages = getMessages(language);
   const calendarYear = new Date().getFullYear();
@@ -35,7 +34,11 @@ export function MemoriesPageClient({ language }: MemoriesPageClientProps) {
     () => groupedByDate.filter((group) => Number.parseInt(group.date.slice(0, 4), 10) === selectedYear),
     [groupedByDate, selectedYear],
   );
-  const calendarMonths = useMemo(() => buildCalendarMonths(selectedYear, filteredDateGroups), [selectedYear, filteredDateGroups]);
+  const locale = language === "zh" ? "zh-CN" : "en-US";
+  const calendarMonths = useMemo(
+    () => buildCalendarMonths(selectedYear, filteredDateGroups, locale),
+    [filteredDateGroups, locale, selectedYear],
+  );
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedThemeKey, setSelectedThemeKey] = useState<string | null>(null);
   const [preview, setPreview] = useState<FilePreview | null>(null);
@@ -429,25 +432,6 @@ export function MemoriesPageClient({ language }: MemoriesPageClientProps) {
   );
 }
 
-function groupMemoriesByDate(items: TimelineMemory[]) {
-  const groups = new Map<string, TimelineMemory[]>();
-
-  for (const item of items) {
-    const current = groups.get(item.memoryDate) ?? [];
-    current.push(item);
-    groups.set(item.memoryDate, current);
-  }
-
-  return [...groups.entries()]
-    .sort((a, b) => b[0].localeCompare(a[0]))
-    .map(([date, groupItems]) => ({
-      date,
-      items: groupItems.sort((a, b) => b.checkpointTurnCount - a.checkpointTurnCount),
-      themeKey: groupItems[0]?.themeKey ?? date,
-      themeTitle: groupItems[0]?.themeTitle ?? date,
-    }));
-}
-
 function groupMemoriesByTheme(items: TimelineMemory[]) {
   const groups = new Map<string, TimelineMemory[]>();
 
@@ -465,60 +449,4 @@ function groupMemoriesByTheme(items: TimelineMemory[]) {
       themeTitle: groupItems[0]?.themeTitle ?? themeKey,
       items: groupItems.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     }));
-}
-
-function getCalendarLevelClass(count: number, groups: Array<{ items: TimelineMemory[] }>) {
-  const maxCount = Math.max(...groups.map((group) => group.items.length), 1);
-  const ratio = count / maxCount;
-
-  if (ratio >= 0.75) {
-    return "calendar-day-3";
-  }
-
-  if (ratio >= 0.5) {
-    return "calendar-day-2";
-  }
-
-  if (ratio > 0) {
-    return "calendar-day-1";
-  }
-
-  return "calendar-day-0";
-}
-
-function buildCalendarMonths(year: number, groups: ReturnType<typeof groupMemoriesByDate>) {
-  const dateCounts = new Map(groups.map((group) => [group.date, group.items.length]));
-
-  return Array.from({ length: 12 }, (_, monthIndex) => {
-    const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-    const label = new Intl.DateTimeFormat("zh-CN", {
-      year: "numeric",
-      month: "long",
-    }).format(new Date(year, monthIndex, 1));
-
-    return {
-      month: monthIndex,
-      label,
-      days: Array.from({ length: daysInMonth }, (_, dayIndex) => {
-        const dayNumber = dayIndex + 1;
-        const date = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(dayNumber).padStart(2, "0")}`;
-
-        return {
-          date,
-          dayLabel: String(dayNumber).padStart(2, "0"),
-          count: dateCounts.get(date) ?? 0,
-        };
-      }),
-    };
-  });
-}
-
-function buildSelectableYears(items: TimelineMemory[], currentYear: number) {
-  const years = items
-    .map((item) => Number.parseInt(item.memoryDate.slice(0, 4), 10))
-    .filter((year) => Number.isFinite(year));
-  const minYear = Math.min(EARLIEST_MEMORY_YEAR, currentYear, ...years);
-  const maxYear = Math.max(currentYear, ...years);
-
-  return Array.from({ length: maxYear - minYear + 1 }, (_, index) => maxYear - index);
 }

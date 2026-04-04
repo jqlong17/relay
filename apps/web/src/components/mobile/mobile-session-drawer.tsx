@@ -1,4 +1,11 @@
 import type { Session } from "@relay/shared-types";
+import {
+  MobileDrawer,
+  MobileDrawerList,
+  MobileDrawerListItem,
+  MobileDrawerHeaderAction,
+  MobileDrawerEmpty,
+} from "@/components/mobile/mobile-drawer-kit";
 
 type MobileSessionDrawerProps = {
   pendingSessionId: string | null;
@@ -28,32 +35,43 @@ export function MobileSessionDrawer({
   onSelect,
 }: MobileSessionDrawerProps) {
   return (
-    <>
-      {isOpen ? <button aria-label="close sessions" className="mobile-drawer-backdrop" onClick={onClose} type="button" /> : null}
-      <aside aria-hidden={!isOpen} className={`mobile-drawer ${isOpen ? "mobile-drawer-open" : ""}`}>
-        <div className="mobile-drawer-head">
-          <span className="mobile-drawer-title">{title}</span>
-          <button className="mobile-drawer-close" onClick={onClose} type="button">
-            {closeLabel}
-          </button>
-        </div>
-        <button className="mobile-drawer-primary" onClick={onCreate} type="button">
-          {createLabel}
-        </button>
-        <div className="mobile-drawer-list">
-          {sessions.length === 0 ? <div className="mobile-empty">{emptyLabel}</div> : null}
-          {sessions.map((session) => (
-            <button
-              className={`mobile-drawer-item ${activeSessionId === session.id ? "mobile-drawer-item-active" : ""} ${pendingSessionId === session.id ? "mobile-drawer-item-pending" : ""}`}
-              key={session.id}
-              onClick={() => onSelect(session.id)}
-              type="button"
-            >
-              {session.title}
-            </button>
-          ))}
-        </div>
-      </aside>
-    </>
+    <MobileDrawer
+      closeAriaLabel="close sessions"
+      closeLabel={closeLabel}
+      headerAction={<MobileDrawerHeaderAction label={createLabel} onClick={onCreate} />}
+      isOpen={isOpen}
+      onClose={onClose}
+      title={title}
+    >
+      <MobileDrawerList variant="compact">
+        {sessions.length === 0 ? <MobileDrawerEmpty label={emptyLabel} /> : null}
+        {sessions.map((session) => (
+          <MobileDrawerListItem
+            active={activeSessionId === session.id}
+            key={session.id}
+            meta={formatSessionTime(session.updatedAt)}
+            onClick={() => onSelect(session.id)}
+            pending={pendingSessionId === session.id}
+            title={session.title}
+          />
+        ))}
+      </MobileDrawerList>
+    </MobileDrawer>
   );
+}
+
+function formatSessionTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
 }

@@ -5,8 +5,10 @@ import { type ClipboardEvent, useCallback, useEffect, useRef, useState, useTrans
 import type { Message, MessageStatus, RuntimeEvent, Session, Workspace } from "@relay/shared-types";
 import { MobileComposer } from "@/components/mobile/mobile-composer";
 import { MobileHeader } from "@/components/mobile/mobile-header";
+import { MobileMemoriesDrawer } from "@/components/mobile/mobile-memories-drawer";
 import { MobileSessionDrawer } from "@/components/mobile/mobile-session-drawer";
 import { MobileThread } from "@/components/mobile/mobile-thread";
+import { MobileTopTabs } from "@/components/mobile/mobile-top-tabs";
 import { MobileWorkspaceDrawer } from "@/components/mobile/mobile-workspace-drawer";
 import { getMessages } from "@/config/messages";
 import type { AppLanguage } from "@/config/ui.config";
@@ -23,6 +25,8 @@ import {
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, SessionAttachment } from "@/lib/api/bridge";
 import { getClipboardImageFiles, readClipboardImageFiles } from "@/lib/clipboard";
+
+type MobilePanelKey = "workspaces" | "sessions" | "memories";
 
 type MobileShellProps = {
   initialActiveSession: Session | null;
@@ -52,10 +56,10 @@ export function MobileShell({
   const [attachments, setAttachments] = useState<SessionAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSessionDrawerOpen, setIsSessionDrawerOpen] = useState(false);
-  const [isWorkspaceDrawerOpen, setIsWorkspaceDrawerOpen] = useState(false);
+  const [activePanel, setActivePanel] = useState<MobilePanelKey | null>(null);
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [pendingWorkspaceId, setPendingWorkspaceId] = useState<string | null>(null);
+  const [manualWorkspacePath, setManualWorkspacePath] = useState("");
   const [restoredFromCache, setRestoredFromCache] = useState(false);
   const [isRunActive, setIsRunActive] = useState(false);
   const [isRunning, startRunTransition] = useTransition();
@@ -68,6 +72,8 @@ export function MobileShell({
     new Map<string, Session>(initialActiveSession ? [[initialActiveSession.id, initialActiveSession]] : []),
   );
   const storageKey = "relay.mobile.snapshot.v1";
+  const favoriteWorkspaceStorageKey = "relay.mobile.favorite-workspaces.v1";
+  const [starredWorkspaceIds, setStarredWorkspaceIds] = useState<string[]>([]);
 
   const syncLayoutMetrics = useCallback(() => {
     if (typeof document === "undefined") {
@@ -186,6 +192,24 @@ export function MobileShell({
   }, [activeSessionId, handleRealtimeEvent]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(favoriteWorkspaceStorageKey);
+      if (!raw) {
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as string[];
+      if (Array.isArray(parsed)) {
+        setStarredWorkspaceIds(parsed.filter((item) => typeof item === "string"));
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
     writeMobileSnapshot(storageKey, {
       activeSession,
       activeWorkspace,
@@ -193,6 +217,16 @@ export function MobileShell({
       workspaces,
     });
   }, [activeSession, activeWorkspace, sessions, workspaces]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(favoriteWorkspaceStorageKey, JSON.stringify(starredWorkspaceIds));
+    } catch {}
+  }, [starredWorkspaceIds]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -320,7 +354,7 @@ export function MobileShell({
     try {
       setError(null);
       setPendingSessionId(sessionId);
-      setIsSessionDrawerOpen(false);
+      setActivePanel(null);
       const cached = sessionCacheRef.current.get(sessionId);
       if (cached) {
         setActiveSession(cached);
@@ -339,7 +373,7 @@ export function MobileShell({
     try {
       setError(null);
       setPendingWorkspaceId(workspace.id);
-      setIsWorkspaceDrawerOpen(false);
+      setActivePanel(null);
       setActiveWorkspace(workspace);
       await openWorkspace(workspace.localPath);
       await refreshMobileData();
@@ -350,6 +384,27 @@ export function MobileShell({
     }
   }
 
+  async function handleOpenWorkspaceByPath(localPath: string, pendingId: string) {
+    try {
+      setError(null);
+      setPendingWorkspaceId(pendingId);
+      await openWorkspace(localPath);
+      setActivePanel(null);
+      setManualWorkspacePath("");
+      await refreshMobileData();
+    } catch (workspaceError) {
+      setError(workspaceError instanceof Error ? workspaceError.message : bridgeOfflineMessage);
+    } finally {
+      setPendingWorkspaceId(null);
+    }
+  }
+
+  function handleToggleStarWorkspace(workspaceId: string) {
+    setStarredWorkspaceIds((current) =>
+      current.includes(workspaceId) ? current.filter((item) => item !== workspaceId) : [...current, workspaceId],
+    );
+  }
+
   async function handleCreateSession() {
     if (!activeWorkspace) {
       return;
@@ -358,7 +413,7 @@ export function MobileShell({
     try {
       setError(null);
       setPendingSessionId("__creating__");
-      setIsSessionDrawerOpen(false);
+      setActivePanel(null);
       const created = await createSession(`Session ${new Date().toLocaleTimeString()}`);
       await refreshMobileData(created.item.id);
     } catch (createError) {
@@ -534,29 +589,40 @@ export function MobileShell({
     ? error
     : restoredFromCache
       ? messages.mobile.cachedSnapshot
-      : `${messages.mobile.currentSession} · ${activeSession?.title ?? messages.mobile.noSession}`;
+      : isRunActive || isRunning
+        ? messages.workspace.loading
+        : isLoading
+          ? messages.mobile.syncing
+          : pendingWorkspaceId
+            ? messages.mobile.switchingWorkspace
+            : pendingSessionId === "__creating__"
+              ? messages.mobile.creatingSession
+              : pendingSessionId
+                ? messages.mobile.switchingSession
+                : "";
 
   return (
     <main className="mobile-app">
       <div className="mobile-topbar" ref={topbarRef}>
         <MobileHeader
+          actions={
+            <MobileTopTabs
+              activeKey={activePanel}
+              items={[
+                { key: "workspaces", label: messages.mobile.workspaces },
+                { key: "sessions", label: messages.mobile.sessions },
+                { key: "memories", label: messages.nav.memories },
+              ]}
+              onChange={(key) => {
+                setActivePanel((current) => (current === key ? null : (key as MobilePanelKey)));
+              }}
+            />
+          }
           brand="Relay"
-          isSessionsOpen={isSessionDrawerOpen}
-          isWorkspacesOpen={isWorkspaceDrawerOpen}
-          onOpenSessions={() => {
-            setIsWorkspaceDrawerOpen(false);
-            setIsSessionDrawerOpen((current) => !current);
-          }}
-          onOpenWorkspaces={() => {
-            setIsSessionDrawerOpen(false);
-            setIsWorkspaceDrawerOpen((current) => !current);
-          }}
           sessionName={activeSession?.title ?? messages.mobile.noSession}
-          sessionsLabel={messages.mobile.sessions}
           statusDetail={statusDetail}
           statusLabel={statusLabel}
           workspaceName={activeWorkspace?.name ?? messages.workspace.noWorkspace}
-          workspacesLabel={messages.mobile.workspaces}
         />
 
         {error ? <div className="mobile-banner mobile-banner-error">{error}</div> : null}
@@ -592,8 +658,8 @@ export function MobileShell({
         closeLabel={messages.settings.close}
         createLabel={messages.workspace.createSession}
         emptyLabel={messages.workspace.noSession}
-        isOpen={isSessionDrawerOpen}
-        onClose={() => setIsSessionDrawerOpen(false)}
+        isOpen={activePanel === "sessions"}
+        onClose={() => setActivePanel(null)}
         onCreate={() => void handleCreateSession()}
         onSelect={(sessionId) => void handleSelectSession(sessionId)}
         pendingSessionId={pendingSessionId}
@@ -604,13 +670,45 @@ export function MobileShell({
       <MobileWorkspaceDrawer
         activeWorkspaceId={activeWorkspace?.id ?? null}
         closeLabel={messages.settings.close}
+        advancedLabel={messages.mobile.advancedWorkspace}
+        currentLabel={messages.mobile.currentWorkspace}
         emptyLabel={messages.workspace.noWorkspace}
-        isOpen={isWorkspaceDrawerOpen}
-        onClose={() => setIsWorkspaceDrawerOpen(false)}
+        favoriteLabel={messages.mobile.favoriteWorkspace}
+        isOpen={activePanel === "workspaces"}
+        manualPath={manualWorkspacePath}
+        manualPathLabel={messages.mobile.workspacePathLabel}
+        manualPathPlaceholder={messages.mobile.workspacePathPlaceholder}
+        noFavoritesLabel={messages.mobile.noStarredWorkspaces}
+        openManualLabel={messages.mobile.openWorkspacePath}
+        onClose={() => setActivePanel(null)}
+        onManualPathChange={setManualWorkspacePath}
+        onOpenManualPath={() => void handleOpenWorkspaceByPath(manualWorkspacePath, "__manual__")}
         onSelect={(workspace) => void handleSelectWorkspace(workspace)}
+        onToggleStar={handleToggleStarWorkspace}
         pendingWorkspaceId={pendingWorkspaceId}
+        recentLabel={messages.mobile.recentWorkspaces}
+        recentHintLabel={messages.mobile.recentWorkspacesHint}
+        starredWorkspaceIds={starredWorkspaceIds}
+        starredLabel={messages.mobile.starredWorkspaces}
         title={messages.mobile.workspaces}
+        unfavoriteLabel={messages.mobile.unfavoriteWorkspace}
         workspaces={workspaces}
+      />
+
+      <MobileMemoriesDrawer
+        closeLabel={messages.settings.close}
+        detailTitleLabel={messages.mobile.memoryDetails}
+        emptyLabel={messages.mobile.noMemories}
+        isOpen={activePanel === "memories"}
+        loadingLabel={messages.workspace.loading}
+        memoriesLabel={messages.memories.memories}
+        noDetailsLabel={messages.mobile.noMemoriesForDate}
+        onClose={() => setActivePanel(null)}
+        sourceSessionsLabel={messages.memories.sourceSessions}
+        title={messages.nav.memories}
+        weekdays={messages.mobile.memoryWeekdays}
+        yearLabel={messages.mobile.year}
+        locale={language === "zh" ? "zh-CN" : "en-US"}
       />
     </main>
   );
@@ -640,6 +738,7 @@ function createOptimisticMessage(
   sequence: number,
   status: MessageStatus = "completed",
   id = `mobile-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  meta?: Message["meta"],
 ): Message {
   const now = new Date().toISOString();
 
@@ -649,6 +748,7 @@ function createOptimisticMessage(
     role,
     content,
     status,
+    meta,
     sequence,
     createdAt: now,
     updatedAt: now,
@@ -660,19 +760,26 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
     return session;
   }
 
+  if (event.type === "process.started") {
+    return upsertProcessMessage(session, assistantMessageId, event);
+  }
+
   if (event.type === "process.delta") {
     return upsertProcessMessage(session, assistantMessageId, event);
+  }
+
+  if (event.type === "process.completed") {
+    return completeProcessMessage(session, assistantMessageId, event);
   }
 
   if (event.type === "message.delta") {
     const messages: Message[] = session.messages.map((message) =>
       message.id === assistantMessageId
-        ? {
+        ? updateMessageStatus({
             ...message,
             content: `${message.content}${event.delta}`,
-            status: "streaming",
             updatedAt: event.createdAt,
-          }
+          }, "streaming")
         : message,
     );
 
@@ -687,7 +794,7 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
   if (event.type === "message.completed" || event.type === "run.completed") {
     const messages: Message[] = session.messages.map((message) =>
       message.id === assistantMessageId || (message.role === "system" && message.status === "streaming")
-        ? { ...message, status: "completed", updatedAt: event.createdAt }
+        ? updateMessageStatus(message, "completed", event.createdAt)
         : message,
     );
 
@@ -702,7 +809,7 @@ function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assis
   if (event.type === "run.failed") {
     const messages: Message[] = session.messages.map((message) =>
       message.id === assistantMessageId || (message.role === "system" && message.status === "streaming")
-        ? { ...message, status: "error", updatedAt: event.createdAt }
+        ? updateMessageStatus(message, "error", event.createdAt)
         : message,
     );
 
@@ -735,7 +842,7 @@ function markStreamingMessageErrored(session: Session | null) {
 
   const messages: Message[] = session.messages.map((message) =>
     (message.role === "assistant" || message.role === "system") && message.status === "streaming"
-      ? { ...message, status: "error" }
+      ? updateMessageStatus(message, "error")
       : message,
   );
 
@@ -749,21 +856,33 @@ function markStreamingMessageErrored(session: Session | null) {
 function upsertProcessMessage(
   session: Session,
   assistantMessageId: string,
-  event: Extract<RuntimeEvent, { type: "process.delta" }>,
+  event: Extract<RuntimeEvent, { type: "process.delta" | "process.started" }>,
 ) {
-  const processMessageId = `${assistantMessageId}:${event.phase}`;
+  const processMessageId = `${assistantMessageId}:process:${event.phase}:${event.itemId}`;
   const existingMessage = session.messages.find((message) => message.id === processMessageId);
-  const nextContent = appendProcessContent(existingMessage?.content ?? "", event.phase, event.delta);
+  const nextContent = event.type === "process.started"
+    ? createInitialProcessContent(event)
+    : appendProcessContent(existingMessage?.content ?? "", event.phase, event.delta);
 
   if (existingMessage) {
     const messages = session.messages.map((message) =>
       message.id === processMessageId
-        ? {
-            ...message,
-            content: nextContent,
-            status: "streaming" as const,
-            updatedAt: event.createdAt,
-          }
+        ? updateMessageStatus(
+            {
+              ...message,
+              content: nextContent,
+              meta: {
+                kind: "process",
+                process: {
+                  itemId: event.itemId,
+                  phase: event.phase,
+                  label: event.type === "process.started" ? event.label : message.meta?.process?.label,
+                },
+              },
+            },
+            "streaming",
+            event.createdAt,
+          )
         : message,
     );
 
@@ -782,6 +901,14 @@ function upsertProcessMessage(
     Math.max(1, session.messages.length),
     "streaming",
     processMessageId,
+    {
+      kind: "process",
+      process: {
+        itemId: event.itemId,
+        phase: event.phase,
+        label: event.type === "process.started" ? event.label : PROCESS_TITLES[event.phase],
+      },
+    },
   );
   nextMessage.createdAt = event.createdAt;
   nextMessage.updatedAt = event.createdAt;
@@ -797,6 +924,24 @@ function upsertProcessMessage(
   };
 }
 
+function completeProcessMessage(
+  session: Session,
+  assistantMessageId: string,
+  event: Extract<RuntimeEvent, { type: "process.completed" }>,
+) {
+  const processMessageId = `${assistantMessageId}:process:${event.phase}:${event.itemId}`;
+
+  return {
+    ...session,
+    updatedAt: event.createdAt,
+    messages: session.messages.map((message) =>
+      message.id === processMessageId
+        ? updateMessageStatus(message, "completed", event.createdAt)
+        : message,
+    ),
+  };
+}
+
 function appendProcessContent(
   current: string,
   phase: Extract<RuntimeEvent, { type: "process.delta" }>["phase"],
@@ -807,15 +952,23 @@ function appendProcessContent(
     return current;
   }
 
-  const title = PROCESS_TITLES[phase];
-  const sectionHeader = `**${title}**\n`;
-  const sectionPrefix = current ? "\n\n" : "";
+  return `${current}${normalizedDelta}`;
+}
 
-  if (!current.includes(sectionHeader)) {
-    return `${current}${sectionPrefix}${sectionHeader}${normalizedDelta}`;
+function createInitialProcessContent(event: Extract<RuntimeEvent, { type: "process.started" }>) {
+  if (event.phase === "command" && event.label) {
+    return `$ ${event.label}\n`;
   }
 
-  return `${current}${normalizedDelta}`;
+  return "";
+}
+
+function updateMessageStatus(message: Message, status: MessageStatus, updatedAt = message.updatedAt): Message {
+  return {
+    ...message,
+    status,
+    updatedAt,
+  };
 }
 
 function resequenceMessages(messages: Message[]) {

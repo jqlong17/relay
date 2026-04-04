@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -111,10 +111,11 @@ describe("MemoriesPageClient", () => {
       expect(screen.getByRole("button", { name: "README.md" })).toBeTruthy();
     });
 
-    await user.click(screen.getByRole("button", { name: "README.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }));
 
     await waitFor(() => {
-      expect(screen.getByText("preview content")).toBeTruthy();
+      expect(bridgeMocks.getFilePreview).toHaveBeenCalledWith("/Users/ruska/project/web-cli/README.md");
+      expect(screen.getByText(/preview content/i)).toBeTruthy();
     });
 
     await user.click(screen.getByRole("button", { name: "关闭" }));
