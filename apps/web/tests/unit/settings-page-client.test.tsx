@@ -125,4 +125,61 @@ describe("SettingsPageClient", () => {
     expect(screen.getByText("远程访问")).toBeTruthy();
     expect(screen.queryByText("账号与设备")).toBeNull();
   });
+
+  it("keeps the GitHub account state when the local bridge device is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url === "/api/ui-config") {
+          return new Response(
+            JSON.stringify({
+              content: "theme = \"light\"",
+              uiConfig: {
+                language: "zh",
+                theme: "light",
+              },
+              cssVariables: {},
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+
+        if (url === "/api/auth/session") {
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              configured: true,
+              session: {
+                method: "github",
+                provider: "github",
+                userId: "user-1",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+
+        if (url === "/api/bridge/device") {
+          return new Response(JSON.stringify({ error: "offline" }), {
+            status: 503,
+            headers: { "content-type": "application/json" },
+          });
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<SettingsPageClient language="zh" />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("GitHub")).toHaveLength(2);
+    });
+
+    expect(screen.getAllByText("user-1")).toHaveLength(2);
+    expect(screen.getAllByText("Relay Mac")).toHaveLength(2);
+    expect(screen.getAllByText("错误").length).toBeGreaterThan(0);
+  });
 });

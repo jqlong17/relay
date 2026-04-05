@@ -108,32 +108,35 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
 
     async function loadIdentity() {
       setIdentityState("loading");
+      setDeviceDirectoryFeedback(null);
 
       try {
-        const [authResponse, deviceResponse] = await Promise.all([
+        const [authResult, deviceResult] = await Promise.allSettled([
           fetch("/api/auth/session", { cache: "no-store" }),
           fetch("/api/bridge/device", { cache: "no-store" }),
         ]);
 
-        if (!authResponse.ok || !deviceResponse.ok) {
-          throw new Error("Failed to load identity");
+        if (authResult.status !== "fulfilled" || !authResult.value.ok) {
+          throw new Error("Failed to load auth session");
         }
 
-        const authData = (await authResponse.json()) as RelayAuthSessionResponse;
-        const deviceData = (await deviceResponse.json()) as LocalDeviceApiResponse;
+        const authData = (await authResult.value.json()) as RelayAuthSessionResponse;
+        const deviceData =
+          deviceResult.status === "fulfilled" && deviceResult.value.ok
+            ? ((await deviceResult.value.json()) as LocalDeviceApiResponse)
+            : null;
 
         if (cancelled) {
           return;
         }
 
         setAuthSession(authData.session);
-        setLocalDevice(deviceData.item);
+        setLocalDevice(deviceData?.item ?? null);
         setIdentityState("idle");
         setDefaultDeviceState("idle");
 
         if (authData.session?.method === "github" && authData.session.userId) {
           setDeviceDirectoryState("loading");
-          setDeviceDirectoryFeedback(null);
 
           try {
             const directory = await loadDeviceDirectory();
@@ -144,6 +147,13 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
 
             setDeviceDirectory(directory);
             setDeviceDirectoryState("idle");
+            if (!deviceData) {
+              setDeviceDirectoryFeedback(
+                language === "zh"
+                  ? "当前运行在云端 Web 环境，无法直接读取这台机器的本机 Relay 状态。账号态与云端设备目录已正常加载。"
+                  : "This web session is running in the cloud, so the local Relay state for this machine is unavailable. Account state and the cloud device directory loaded correctly.",
+              );
+            }
           } catch (error) {
             if (!cancelled) {
               setDeviceDirectory(null);
