@@ -1,5 +1,6 @@
 type SupabaseSession = {
   access_token: string;
+  refresh_token: string;
 };
 
 type SupabaseSessionResult = {
@@ -31,7 +32,12 @@ async function readExistingAccessToken(client: SupabaseOAuthClient) {
     throw error;
   }
 
-  return data.session?.access_token ?? null;
+  return data.session
+    ? {
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+      }
+    : null;
 }
 
 async function wait(delayMs: number) {
@@ -55,9 +61,9 @@ export async function resolveOAuthCallbackAccessToken({
   storage = typeof window === "undefined" ? null : window.sessionStorage,
   waitMs = 150,
 }: ResolveOAuthCallbackAccessTokenOptions) {
-  const existingAccessToken = await readExistingAccessToken(client);
-  if (existingAccessToken) {
-    return existingAccessToken;
+  const existingSession = await readExistingAccessToken(client);
+  if (existingSession) {
+    return existingSession;
   }
 
   if (!code) {
@@ -90,15 +96,17 @@ export async function resolveOAuthCallbackAccessToken({
 
   try {
     const { data, error } = await client.auth.exchangeCodeForSession(code);
-    if (error || !data.session?.access_token) {
+    if (error || !data.session?.access_token || !data.session.refresh_token) {
       throw error ?? new Error("Missing Supabase session");
     }
 
     storage?.setItem(storageKey, "done");
-    return data.session.access_token;
+    return {
+      accessToken: data.session.access_token,
+      refreshToken: data.session.refresh_token,
+    };
   } catch (error) {
     storage?.removeItem(storageKey);
     throw error;
   }
 }
-

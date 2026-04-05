@@ -1,13 +1,11 @@
-import { getBridgeBaseUrl } from "../../_lib";
+import { bridgeFetch } from "../../_lib";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const upstreamUrl = new URL("/runtime/subscribe", getBridgeBaseUrl());
-  upstreamUrl.search = url.search;
+  const pathname = `/runtime/subscribe${url.search}`;
 
   try {
-    const response = await fetch(upstreamUrl, {
-      cache: "no-store",
+    const response = await bridgeFetch(pathname, {
       headers: {
         accept: "text/event-stream",
       },

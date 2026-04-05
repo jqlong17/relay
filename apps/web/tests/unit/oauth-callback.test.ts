@@ -24,12 +24,12 @@ describe("oauth callback helper", () => {
 
   it("reuses an existing Supabase browser session without exchanging the code again", async () => {
     const getSession = vi.fn().mockResolvedValue({
-      data: { session: { access_token: "existing-token" } },
+      data: { session: { access_token: "existing-token", refresh_token: "refresh-token" } },
       error: null,
     });
     const exchangeCodeForSession = vi.fn();
 
-    const accessToken = await resolveOAuthCallbackAccessToken({
+    const sessionTokens = await resolveOAuthCallbackAccessToken({
       client: {
         auth: {
           exchangeCodeForSession,
@@ -40,17 +40,20 @@ describe("oauth callback helper", () => {
       storage: createStorage(),
     });
 
-    expect(accessToken).toBe("existing-token");
+    expect(sessionTokens).toEqual({
+      accessToken: "existing-token",
+      refreshToken: "refresh-token",
+    });
     expect(exchangeCodeForSession).not.toHaveBeenCalled();
   });
 
   it("exchanges the OAuth code and marks it as done when no session exists yet", async () => {
     const storage = createStorage();
-    const accessToken = await resolveOAuthCallbackAccessToken({
+    const sessionTokens = await resolveOAuthCallbackAccessToken({
       client: {
         auth: {
           exchangeCodeForSession: vi.fn().mockResolvedValue({
-            data: { session: { access_token: "fresh-token" } },
+            data: { session: { access_token: "fresh-token", refresh_token: "fresh-refresh-token" } },
             error: null,
           }),
           getSession: vi.fn().mockResolvedValue({
@@ -63,7 +66,10 @@ describe("oauth callback helper", () => {
       storage,
     });
 
-    expect(accessToken).toBe("fresh-token");
+    expect(sessionTokens).toEqual({
+      accessToken: "fresh-token",
+      refreshToken: "fresh-refresh-token",
+    });
     expect(storage.getItem("relay.oauth.callback.oauth-code")).toBe("done");
   });
 
@@ -74,7 +80,7 @@ describe("oauth callback helper", () => {
       .fn()
       .mockResolvedValueOnce({ data: { session: null }, error: null })
       .mockResolvedValueOnce({ data: { session: null }, error: null })
-      .mockResolvedValueOnce({ data: { session: { access_token: "reused-token" } }, error: null });
+      .mockResolvedValueOnce({ data: { session: { access_token: "reused-token", refresh_token: "reused-refresh-token" } }, error: null });
     const exchangeCodeForSession = vi.fn();
 
     const promise = resolveOAuthCallbackAccessToken({
@@ -92,7 +98,10 @@ describe("oauth callback helper", () => {
 
     await vi.runAllTimersAsync();
 
-    await expect(promise).resolves.toBe("reused-token");
+    await expect(promise).resolves.toEqual({
+      accessToken: "reused-token",
+      refreshToken: "reused-refresh-token",
+    });
     expect(exchangeCodeForSession).not.toHaveBeenCalled();
   });
 
@@ -121,4 +130,3 @@ describe("oauth callback helper", () => {
     expect(storage.getItem("relay.oauth.callback.oauth-code")).toBeNull();
   });
 });
-

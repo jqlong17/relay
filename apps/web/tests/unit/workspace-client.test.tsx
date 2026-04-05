@@ -153,6 +153,19 @@ describe("WorkspaceClient", () => {
           );
         }
 
+        if (url === "/api/bridge/route-status") {
+          return new Response(
+            JSON.stringify({
+              kind: "local",
+              reason: "local_device_matches_default",
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
         throw new Error(`Unexpected fetch: ${url}`);
       }),
     );

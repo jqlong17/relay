@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useTransition } from "react";
 
-import type { RelayCloudDevice, RelayDevice, RelayDeviceDirectory } from "@relay/shared-types";
+import type { RelayCloudDevice, RelayDevice, RelayDeviceConnectionStatus, RelayDeviceDirectory } from "@relay/shared-types";
 import { useRouter } from "next/navigation";
 import type { RelayAuthSessionResponse } from "@/lib/auth/types";
 import { loadDeviceDirectory, setDefaultDevice } from "@/lib/api/cloud-devices";
+import { getRelayDeviceConnectionStatus, pingRelayDevice } from "@/lib/api/realtime-relay";
 import { ensureCurrentGitHubDeviceReady } from "@/lib/auth/device-bootstrap";
 import { toErrorMessage } from "@/lib/errors";
 import { getMessages } from "@/config/messages";
@@ -80,6 +81,10 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
   const [identityState, setIdentityState] = useState<"idle" | "loading" | "error">("idle");
   const [localDevice, setLocalDevice] = useState<RelayDevice | null>(null);
   const [logoutState, setLogoutState] = useState<"idle" | "submitting" | "done" | "error">("idle");
+  const [realtimeFeedback, setRealtimeFeedback] = useState<string | null>(null);
+  const [realtimeState, setRealtimeState] = useState<"idle" | "loading" | "error">("idle");
+  const [realtimeStatus, setRealtimeStatus] = useState<RelayDeviceConnectionStatus | null>(null);
+  const [pingState, setPingState] = useState<"idle" | "submitting" | "done" | "error">("idle");
   const [isRefreshing, startRefresh] = useTransition();
 
   useEffect(() => {
@@ -210,6 +215,28 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
     }
   }
 
+  const targetDeviceId = deviceDirectory?.defaultDeviceId ?? null;
+
+  async function refreshRealtimeStatus(deviceId = targetDeviceId) {
+    if (authSession?.method !== "github" || !authSession.userId || !deviceId) {
+      setRealtimeStatus(null);
+      setRealtimeState("idle");
+      return;
+    }
+
+    setRealtimeState("loading");
+
+    try {
+      const status = await getRelayDeviceConnectionStatus(deviceId);
+      setRealtimeStatus(status);
+      setRealtimeState("idle");
+    } catch (error) {
+      setRealtimeStatus(null);
+      setRealtimeState("error");
+      setRealtimeFeedback(toErrorMessage(error, messages.settings.channelStatusFailed));
+    }
+  }
+
   async function handleAppearanceSave() {
     setAppearanceState("saving");
 
@@ -287,6 +314,28 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
     }
   }
 
+  async function handlePingDefaultDevice() {
+    if (authSession?.method !== "github" || !authSession.userId || !targetDeviceId) {
+      setPingState("error");
+      setRealtimeFeedback(messages.settings.channelRequiresGithub);
+      return;
+    }
+
+    setPingState("submitting");
+    setRealtimeFeedback(null);
+
+    try {
+      const result = await pingRelayDevice(targetDeviceId);
+      setPingState("done");
+      setRealtimeFeedback(`${messages.settings.pingSucceeded} · ${result.name} · ${result.hostname}`);
+      await refreshRealtimeStatus(targetDeviceId);
+    } catch (error) {
+      setPingState("error");
+      setRealtimeFeedback(toErrorMessage(error, messages.settings.pingFailed));
+      await refreshRealtimeStatus(targetDeviceId);
+    }
+  }
+
   async function handleBindCurrentDevice() {
     if (!authSession?.userId || authSession.method !== "github") {
       setBindState("error");
@@ -311,6 +360,7 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
       setDefaultDeviceState(result.didSetDefault ? "done" : "idle");
       setDeviceDirectoryFeedback(result.didSetDefault ? messages.settings.defaultSaved : null);
       setBindState("done");
+      setRealtimeFeedback(null);
     } catch (error) {
       console.error("Device binding failed.", error);
       setBindState("error");
@@ -341,6 +391,8 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
       );
       setDefaultDeviceState("done");
       setDeviceDirectoryFeedback(messages.settings.defaultSaved);
+      setRealtimeFeedback(null);
+      await refreshRealtimeStatus(defaultDeviceId);
     } catch (error) {
       setDefaultDeviceState("error");
       setDeviceDirectoryFeedback(toErrorMessage(error, messages.settings.defaultDeviceFailed));
@@ -411,6 +463,24 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
           : messages.settings.notSet);
   const defaultDeviceSummaryLabel =
     deviceDirectoryState === "loading" && !deviceDirectory ? messages.settings.loading : defaultDeviceName;
+  const realtimeStatusLabel =
+    realtimeState === "loading"
+      ? messages.settings.loading
+      : pingState === "submitting"
+        ? messages.settings.pinging
+        : !targetDeviceId
+          ? messages.settings.notSet
+          : realtimeStatus?.connected
+            ? messages.settings.channelConnected
+            : messages.settings.channelDisconnected;
+  const realtimeHint =
+    authSession?.method !== "github"
+      ? messages.settings.channelRequiresGithub
+      : !targetDeviceId
+        ? messages.settings.channelNeedsDefaultDevice
+        : realtimeStatus?.connected
+          ? messages.settings.channelConnectedHint
+          : messages.settings.channelDisconnectedHint;
   const localDeviceSummaryMeta =
     localDevice
       ? bindingStatusLabel
@@ -437,6 +507,19 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
     { id: "appearance", label: messages.settings.appearanceTab },
     { id: "access", label: messages.settings.accessTab },
   ];
+
+  useEffect(() => {
+    setRealtimeFeedback(null);
+    setPingState("idle");
+
+    if (authSession?.method !== "github" || !authSession.userId || !targetDeviceId) {
+      setRealtimeStatus(null);
+      setRealtimeState("idle");
+      return;
+    }
+
+    void refreshRealtimeStatus(targetDeviceId);
+  }, [authSession?.method, authSession?.userId, targetDeviceId]);
 
   return (
     <section className="simple-page settings-page">
@@ -557,6 +640,40 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
               </div>
             </div>
             <p className="settings-section-copy">{messages.settings.devicesHint}</p>
+            <article className="settings-device-card">
+              <div className="settings-device-card-main">
+                <div className="settings-device-card-head">
+                  <strong className="settings-device-card-title">{messages.settings.cloudRelayChannel}</strong>
+                  <div className="settings-device-card-badges">
+                    <span className="settings-device-badge">{realtimeStatusLabel}</span>
+                    {defaultCloudDevice ? (
+                      <span className="settings-device-badge settings-device-badge-accent">{defaultCloudDevice.name}</span>
+                    ) : null}
+                  </div>
+                </div>
+                <p className="settings-device-card-meta">
+                  {defaultCloudDevice
+                    ? `${defaultCloudDevice.hostname} · ${defaultCloudDevice.platform} / ${defaultCloudDevice.arch}`
+                    : messages.settings.channelNeedsDefaultDevice}
+                </p>
+                <p className="settings-device-card-meta settings-device-card-meta-soft">{realtimeHint}</p>
+              </div>
+              <div className="settings-device-card-actions">
+                <button
+                  className="settings-save"
+                  disabled={
+                    pingState === "submitting" ||
+                    realtimeState === "loading" ||
+                    authSession?.method !== "github" ||
+                    !targetDeviceId
+                  }
+                  onClick={() => void handlePingDefaultDevice()}
+                  type="button"
+                >
+                  {pingState === "submitting" ? messages.settings.pinging : messages.settings.pingDefaultDevice}
+                </button>
+              </div>
+            </article>
             {authSession?.method !== "github" ? (
               <p className="settings-section-copy settings-section-copy-compact">{messages.settings.devicesGithubOnly}</p>
             ) : deviceDirectoryState === "loading" && !deviceDirectory ? (
@@ -618,6 +735,9 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
               </div>
               <span>{deviceDirectoryFeedback}</span>
             </div>
+            {realtimeFeedback ? (
+              <p className="settings-section-copy settings-section-copy-compact">{realtimeFeedback}</p>
+            ) : null}
           </section>
         ) : null}
 

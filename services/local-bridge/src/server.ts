@@ -1,4 +1,5 @@
 import { createBridgeServer } from "./index";
+import { CloudRelayRealtimeService } from "./services/cloud-relay-realtime-service";
 import { CodexAppServerService } from "./services/codex-app-server";
 import { DevicePresenceService } from "./services/device-presence-service";
 import { LocalDeviceService } from "./services/local-device-service";
@@ -14,6 +15,9 @@ const localDeviceService = new LocalDeviceService(relayStateStore);
 const devicePresenceService = new DevicePresenceService({
   localDeviceService,
 });
+const cloudRelayRealtimeService = new CloudRelayRealtimeService({
+  localDeviceService,
+});
 
 const server = createBridgeServer({
   codexAppServerService,
@@ -26,10 +30,12 @@ server.listen(port, host, () => {
   console.log(`relay local bridge listening on http://${host}:${port}`);
   void warmBridge(codexAppServerService, workspaceStore);
   devicePresenceService.start();
+  cloudRelayRealtimeService.start();
 });
 
 server.on("close", () => {
   devicePresenceService.stop();
+  void cloudRelayRealtimeService.stop();
 });
 
 async function warmBridge(codexAppServerService: CodexAppServerService, workspaceStore: WorkspaceStore) {

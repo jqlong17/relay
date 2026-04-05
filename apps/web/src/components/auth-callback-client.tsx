@@ -29,14 +29,14 @@ export function AuthCallbackClient({ errorLabel, nextPath, processingLabel }: Au
 
         const code = searchParams.get("code");
         const supabase = createSupabaseBrowserClient();
-        const accessToken = await resolveOAuthCallbackAccessToken({ client: supabase, code });
+        const sessionTokens = await resolveOAuthCallbackAccessToken({ client: supabase, code });
 
         const response = await fetch("/api/auth/supabase-session", {
           method: "POST",
           headers: {
             "content-type": "application/json",
           },
-          body: JSON.stringify({ accessToken }),
+          body: JSON.stringify(sessionTokens),
         });
 
         if (!response.ok) {

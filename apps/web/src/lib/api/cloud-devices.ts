@@ -2,7 +2,6 @@
 
 import type { RelayCloudDevice, RelayDeviceDirectory } from "@relay/shared-types";
 import { toErrorMessage } from "@/lib/errors";
-import { createSupabaseBrowserClient } from "@/lib/auth/supabase";
 
 type SupabaseDeviceRow = {
   id?: string;
@@ -22,30 +21,17 @@ type SupabaseUserDevicePreferenceRow = {
   default_device_id?: string | null;
 };
 
-const DEVICE_ONLINE_TTL_MS = 90_000;
+type DeviceDirectoryApiResponse = {
+  userId: string;
+  defaultDeviceId: string | null;
+  items: SupabaseDeviceRow[];
+};
 
-async function getSupabaseBrowserUserId() {
-  const supabase = createSupabaseBrowserClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
-
-  if (error) {
-    throw new Error(toErrorMessage(error, "Failed to read the current GitHub session."));
-  }
-
-  const userId = user?.id?.trim() ?? "";
-
-  if (!userId) {
-    throw new Error("GitHub browser session expired. Please sign in with GitHub again.");
-  }
-
-  return {
-    supabase,
-    userId,
-  };
+function isDeviceDirectoryApiResponse(value: unknown): value is DeviceDirectoryApiResponse {
+  return !!value && typeof value === "object" && typeof (value as DeviceDirectoryApiResponse).userId === "string";
 }
+
+const DEVICE_ONLINE_TTL_MS = 90_000;
 
 function mapCloudDevice(row: SupabaseDeviceRow): RelayCloudDevice {
   const lastSeenAt = typeof row.last_seen_at === "string" && row.last_seen_at.trim().length > 0 ? row.last_seen_at : null;
@@ -70,30 +56,24 @@ function mapCloudDevice(row: SupabaseDeviceRow): RelayCloudDevice {
 }
 
 async function loadDeviceDirectory(): Promise<RelayDeviceDirectory> {
-  const { supabase, userId } = await getSupabaseBrowserUserId();
-  const [{ data: devicesData, error: devicesError }, { data: preferenceData, error: preferenceError }] = await Promise.all([
-    supabase
-      .from("devices")
-      .select("id, user_id, local_device_id, name, hostname, platform, arch, status, last_seen_at, created_at, updated_at")
-      .order("updated_at", { ascending: false }),
-    supabase.from("user_device_preferences").select("default_device_id").maybeSingle(),
-  ]);
+  const response = await fetch("/api/cloud/devices", {
+    method: "GET",
+    cache: "no-store",
+  });
+  const payload = (await response.json().catch(() => null)) as DeviceDirectoryApiResponse | { error?: string } | null;
 
-  if (devicesError) {
-    throw new Error(toErrorMessage(devicesError, "Failed to load devices."));
+  if (!response.ok) {
+    throw new Error(toErrorMessage(payload, "Failed to load devices."));
   }
 
-  if (preferenceError) {
-    throw new Error(toErrorMessage(preferenceError, "Failed to load the default device."));
+  if (!isDeviceDirectoryApiResponse(payload)) {
+    throw new Error("Device directory payload is invalid.");
   }
 
   return {
-    userId,
-    defaultDeviceId:
-      typeof preferenceData?.default_device_id === "string" && preferenceData.default_device_id.trim().length > 0
-        ? preferenceData.default_device_id.trim()
-        : null,
-    items: (devicesData ?? []).map(mapCloudDevice),
+    userId: payload.userId.trim(),
+    defaultDeviceId: typeof payload.defaultDeviceId === "string" && payload.defaultDeviceId.trim().length > 0 ? payload.defaultDeviceId.trim() : null,
+    items: payload.items.map(mapCloudDevice),
   };
 }
 
@@ -104,28 +84,24 @@ async function setDefaultDevice(deviceId: string) {
     throw new Error("Default device id is required.");
   }
 
-  const { supabase, userId } = await getSupabaseBrowserUserId();
-  const { data, error } = await supabase
-    .from("user_device_preferences")
-    .upsert(
-      {
-        user_id: userId,
-        default_device_id: normalizedDeviceId,
-      },
-      {
-        onConflict: "user_id",
-      },
-    )
-    .select("default_device_id")
-    .single();
+  const response = await fetch("/api/cloud/default-device", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      deviceId: normalizedDeviceId,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as { defaultDeviceId?: string; error?: string } | null;
 
-  if (error) {
-    throw new Error(toErrorMessage(error, "Failed to update the default device."));
+  if (!response.ok) {
+    throw new Error(toErrorMessage(payload, "Failed to update the default device."));
   }
 
-  const resolvedDefaultDeviceId = data?.default_device_id?.trim() ?? normalizedDeviceId;
+  const resolvedDefaultDeviceId = payload?.defaultDeviceId?.trim() ?? normalizedDeviceId;
 
   return resolvedDefaultDeviceId;
 }
 
-export { DEVICE_ONLINE_TTL_MS, getSupabaseBrowserUserId, loadDeviceDirectory, setDefaultDevice };
+export { DEVICE_ONLINE_TTL_MS, loadDeviceDirectory, setDefaultDevice };

@@ -67,13 +67,14 @@ describe("auth routes", () => {
     const response = await supabaseSession(
       new Request("http://localhost/api/auth/supabase-session", {
         method: "POST",
-        body: JSON.stringify({ accessToken: "access-token" }),
+        body: JSON.stringify({ accessToken: "access-token", refreshToken: "refresh-token" }),
         headers: { "content-type": "application/json" },
       }),
     );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("set-cookie")).toContain("relay_session=");
+    expect(response.headers.get("set-cookie")).toContain("relay_supabase_session=");
     expect(supabaseMocks.getClaims).toHaveBeenCalledWith("access-token");
   });
 
@@ -83,7 +84,7 @@ describe("auth routes", () => {
     const response = await supabaseSession(
       new Request("http://localhost/api/auth/supabase-session", {
         method: "POST",
-        body: JSON.stringify({ accessToken: "access-token" }),
+        body: JSON.stringify({ accessToken: "access-token", refreshToken: "refresh-token" }),
         headers: { "content-type": "application/json" },
       }),
     );
@@ -96,5 +97,6 @@ describe("auth routes", () => {
     const response = await logout();
     expect(response.status).toBe(200);
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(response.headers.get("set-cookie")).toContain("relay_supabase_session=");
   });
 });

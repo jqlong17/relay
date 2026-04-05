@@ -19,7 +19,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@relay/shared-auth": ["../../packages/shared-auth/src/index.ts"],
+      "@relay/shared-types": ["../../packages/shared-types/src/index.ts"]
     }
   },
   "include": [

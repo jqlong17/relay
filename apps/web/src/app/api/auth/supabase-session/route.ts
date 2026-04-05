@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { buildSessionCookie, createSessionToken, isSessionConfigured } from "@/lib/auth/session";
+import {
+  buildSupabaseSessionCookie,
+  createSupabaseSessionCookieValue,
+} from "@/lib/auth/supabase-session";
 import { createSupabaseServerClient, isSupabaseAuthConfigured } from "@/lib/auth/supabase";
 
 type SessionRequestBody = {
   accessToken?: string;
+  refreshToken?: string;
 };
 
 export async function POST(request: Request) {
@@ -13,9 +18,10 @@ export async function POST(request: Request) {
 
   const body = (await request.json().catch(() => ({}))) as SessionRequestBody;
   const accessToken = body.accessToken?.trim() ?? "";
+  const refreshToken = body.refreshToken?.trim() ?? "";
 
-  if (!accessToken) {
-    return NextResponse.json({ error: "Missing access token." }, { status: 400 });
+  if (!accessToken || !refreshToken) {
+    return NextResponse.json({ error: "Missing Supabase session tokens." }, { status: 400 });
   }
 
   const supabase = createSupabaseServerClient();
@@ -40,6 +46,7 @@ export async function POST(request: Request) {
     });
     const response = NextResponse.json({ ok: true });
     response.cookies.set(buildSessionCookie(token));
+    response.cookies.set(buildSupabaseSessionCookie(await createSupabaseSessionCookieValue({ accessToken, refreshToken })));
     return response;
   }
 
@@ -75,5 +82,6 @@ export async function POST(request: Request) {
   });
   const response = NextResponse.json({ ok: true });
   response.cookies.set(buildSessionCookie(token));
+  response.cookies.set(buildSupabaseSessionCookie(await createSupabaseSessionCookieValue({ accessToken, refreshToken })));
   return response;
 }

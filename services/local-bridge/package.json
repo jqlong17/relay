@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@relay/memory-core": "workspace:*",
+    "@relay/shared-auth": "workspace:*",
     "@relay/shared-types": "workspace:*"
   }
 }

@@ -1,46 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeviceBindCode } from "../../src/lib/api/device-binding";
 
-const supabaseMocks = vi.hoisted(() => ({
-  getSession: vi.fn(),
-  getSupabaseAnonKey: vi.fn(() => "anon-key"),
-  getSupabaseUrl: vi.fn(() => "https://example.supabase.co"),
-}));
-
-vi.mock("@/lib/auth/supabase", () => ({
-  createSupabaseBrowserClient: vi.fn(() => ({
-    auth: {
-      getSession: supabaseMocks.getSession,
-    },
-  })),
-  getSupabaseAnonKey: supabaseMocks.getSupabaseAnonKey,
-  getSupabaseUrl: supabaseMocks.getSupabaseUrl,
-}));
-
 describe("device binding api", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockReset();
-    supabaseMocks.getSession.mockReset();
-    supabaseMocks.getSession.mockResolvedValue({
-      data: {
-        session: {
-          access_token: "access-token",
-        },
-      },
-      error: null,
-    });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("sends the GitHub access token explicitly to the bind-code rpc", async () => {
+  it("requests a bind code from the Relay server api", async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify([{ code: "ABCDEF1234", expires_at: "2026-04-05T08:00:00.000Z" }]), {
+      new Response(JSON.stringify({ code: "ABCDEF1234", expiresAt: "2026-04-05T08:00:00.000Z" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -53,12 +28,10 @@ describe("device binding api", () => {
       expiresAt: "2026-04-05T08:00:00.000Z",
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://example.supabase.co/rest/v1/rpc/create_device_bind_code",
+      "/api/cloud/device-bind-code",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          Authorization: "Bearer access-token",
-          apikey: "anon-key",
           "content-type": "application/json",
         }),
       }),

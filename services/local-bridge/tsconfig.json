@@ -5,7 +5,11 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "skipLibCheck": true,
-    "types": ["vitest/globals", "node"]
+    "types": ["vitest/globals", "node"],
+    "paths": {
+      "@relay/shared-auth": ["../../packages/shared-auth/src/index.ts"],
+      "@relay/shared-types": ["../../packages/shared-types/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]
 }

@@ -54,6 +54,7 @@ import {
   uploadSessionImage,
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, FilePreview, SessionAttachment } from "@/lib/api/bridge";
+import { loadBridgeRouteStatus } from "@/lib/api/bridge-route-status";
 import { loadDeviceDirectory } from "@/lib/api/cloud-devices";
 import { ensureCurrentGitHubDeviceReady } from "@/lib/auth/device-bootstrap";
 import type { RelayAuthSessionResponse } from "@/lib/auth/types";
@@ -328,7 +329,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     deviceRouteState === "loading" && authSession?.method === "github"
       ? messages.workspace.deviceRouteLoading
       : isCloudWebSession
-        ? messages.workspace.publicCloudRoutePending
+        ? messages.workspace.publicCloudRelayValue
       : authSession?.method === "github" && defaultRelayDevice
         ? isUsingDefaultRelayDevice
           ? messages.workspace.deviceRouteReady
@@ -578,6 +579,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
           try {
             const result = await ensureCurrentGitHubDeviceReady();
+            const routeStatus = await loadBridgeRouteStatus();
 
             if (cancelled) {
               return;
@@ -585,15 +587,22 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
             setLocalRelayDevice(result.localDevice);
             setDeviceDirectory(result.directory);
-            setDeviceRouteError(null);
-            setDeviceRouteState("idle");
+            setDeviceRouteError(
+              routeStatus.kind === "unavailable"
+                ? routeStatus.reason === "default_device_offline"
+                  ? messages.workspace.defaultDeviceOffline
+                  : routeStatus.reason === "no_default_device"
+                    ? messages.workspace.defaultDeviceMissing
+                    : routeStatus.reason === "github_session_expired"
+                      ? messages.workspace.githubSessionExpired
+                      : messages.workspace.deviceRouteUnavailable
+                : null,
+            );
+            setDeviceRouteState(routeStatus.kind === "unavailable" ? "error" : "idle");
           } catch (routeError) {
             if (cancelled) {
               return;
             }
-
-            setDeviceRouteError(routeError instanceof Error ? routeError.message : "Failed to resolve Relay device route.");
-            setDeviceRouteState("error");
 
             const [localDeviceResponse, directory] = await Promise.allSettled([getLocalDevice(), loadDeviceDirectory()]);
 
@@ -608,6 +617,9 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
             if (directory.status === "fulfilled") {
               setDeviceDirectory(directory.value);
             }
+
+            setDeviceRouteError(routeError instanceof Error ? routeError.message : "Failed to resolve Relay device route.");
+            setDeviceRouteState("error");
           }
 
           return;
