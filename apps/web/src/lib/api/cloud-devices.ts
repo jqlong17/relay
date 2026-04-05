@@ -22,6 +22,8 @@ type SupabaseUserDevicePreferenceRow = {
   default_device_id?: string | null;
 };
 
+const DEVICE_ONLINE_TTL_MS = 90_000;
+
 async function getSupabaseBrowserUserId() {
   const supabase = createSupabaseBrowserClient();
   const {
@@ -46,6 +48,12 @@ async function getSupabaseBrowserUserId() {
 }
 
 function mapCloudDevice(row: SupabaseDeviceRow): RelayCloudDevice {
+  const lastSeenAt = typeof row.last_seen_at === "string" && row.last_seen_at.trim().length > 0 ? row.last_seen_at : null;
+  const isFresh =
+    lastSeenAt !== null &&
+    Number.isFinite(Date.parse(lastSeenAt)) &&
+    Date.now() - Date.parse(lastSeenAt) <= DEVICE_ONLINE_TTL_MS;
+
   return {
     id: row.id?.trim() ?? "",
     userId: row.user_id?.trim() ?? "",
@@ -54,8 +62,8 @@ function mapCloudDevice(row: SupabaseDeviceRow): RelayCloudDevice {
     hostname: row.hostname?.trim() || "unknown",
     platform: row.platform?.trim() || "unknown",
     arch: row.arch?.trim() || "unknown",
-    status: row.status === "offline" ? "offline" : "online",
-    lastSeenAt: typeof row.last_seen_at === "string" && row.last_seen_at.trim().length > 0 ? row.last_seen_at : null,
+    status: row.status === "offline" || !isFresh ? "offline" : "online",
+    lastSeenAt,
     createdAt: row.created_at?.trim() ?? "",
     updatedAt: row.updated_at?.trim() ?? "",
   };
@@ -120,4 +128,4 @@ async function setDefaultDevice(deviceId: string) {
   return resolvedDefaultDeviceId;
 }
 
-export { getSupabaseBrowserUserId, loadDeviceDirectory, setDefaultDevice };
+export { DEVICE_ONLINE_TTL_MS, getSupabaseBrowserUserId, loadDeviceDirectory, setDefaultDevice };

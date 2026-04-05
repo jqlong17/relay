@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const supabaseMocks = vi.hoisted(() => ({
   devicesOrder: vi.fn(),
@@ -48,6 +48,7 @@ import { loadDeviceDirectory, setDefaultDevice } from "@/lib/api/cloud-devices";
 describe("cloud devices api", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockImplementation(() => new Date("2026-04-05T01:00:30.000Z").getTime());
     supabaseMocks.getUser.mockResolvedValue({
       data: {
         user: {
@@ -56,6 +57,10 @@ describe("cloud devices api", () => {
       },
       error: null,
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("loads the current user's device directory and default device", async () => {
@@ -70,7 +75,7 @@ describe("cloud devices api", () => {
           platform: "darwin",
           arch: "arm64",
           status: "online",
-          last_seen_at: "2026-04-05T00:00:00.000Z",
+          last_seen_at: "2026-04-05T01:00:00.000Z",
           created_at: "2026-04-05T00:00:00.000Z",
           updated_at: "2026-04-05T01:00:00.000Z",
         },
@@ -97,9 +102,45 @@ describe("cloud devices api", () => {
           platform: "darwin",
           arch: "arm64",
           status: "online",
-          lastSeenAt: "2026-04-05T00:00:00.000Z",
+          lastSeenAt: "2026-04-05T01:00:00.000Z",
           createdAt: "2026-04-05T00:00:00.000Z",
           updatedAt: "2026-04-05T01:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("marks stale devices as offline when the last heartbeat expired", async () => {
+    supabaseMocks.devicesOrder.mockResolvedValue({
+      data: [
+        {
+          id: "cloud-device-1",
+          user_id: "user-1",
+          local_device_id: "local-device-1",
+          name: "Relay Mac",
+          hostname: "relay.local",
+          platform: "darwin",
+          arch: "arm64",
+          status: "online",
+          last_seen_at: "2026-04-05T00:57:00.000Z",
+          created_at: "2026-04-05T00:00:00.000Z",
+          updated_at: "2026-04-05T00:57:00.000Z",
+        },
+      ],
+      error: null,
+    });
+    supabaseMocks.preferenceMaybeSingle.mockResolvedValue({
+      data: {
+        default_device_id: "cloud-device-1",
+      },
+      error: null,
+    });
+
+    await expect(loadDeviceDirectory()).resolves.toMatchObject({
+      items: [
+        {
+          id: "cloud-device-1",
+          status: "offline",
         },
       ],
     });
