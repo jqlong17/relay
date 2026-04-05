@@ -3,3 +3,9 @@ node_modules/
 .DS_Store
 dist/
 build/
+.env.local
+.tmp/
+.relay-dev/*.pid
+.relay-dev/nohup-test.log
+apps/web/test-results/
+dist-desktop/

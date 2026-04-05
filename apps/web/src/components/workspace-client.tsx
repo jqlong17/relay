@@ -17,15 +17,28 @@ import {
   useTransition,
 } from "react";
 
-import type { FileTreeNode, Message, MessageStatus, RuntimeEvent, Session, TimelineMemory, Workspace } from "@relay/shared-types";
+import type {
+  AutomationRule,
+  FileTreeNode,
+  Message,
+  MessageStatus,
+  RelayDevice,
+  RelayDeviceDirectory,
+  RuntimeEvent,
+  Session,
+  TimelineMemory,
+  Workspace,
+} from "@relay/shared-types";
 import { getMessages } from "@/config/messages";
 import type { AppLanguage } from "@/config/ui.config";
 import {
   archiveSession,
   createSession,
+  getLocalDevice,
   getFilePreview,
   getFileTree,
   listMemories,
+  listAutomations,
   getSession,
   getSessionMemories,
   listSessions,
@@ -41,6 +54,9 @@ import {
   uploadSessionImage,
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, FilePreview, SessionAttachment } from "@/lib/api/bridge";
+import { loadDeviceDirectory } from "@/lib/api/cloud-devices";
+import { ensureCurrentGitHubDeviceReady } from "@/lib/auth/device-bootstrap";
+import type { RelayAuthSessionResponse } from "@/lib/auth/types";
 import { getClipboardImageFiles, readClipboardImageFiles } from "@/lib/clipboard";
 import { renderMarkdown } from "@/lib/markdown";
 
@@ -106,7 +122,10 @@ type MentionQueryState = {
   end: number;
 };
 
+type SessionGoalAutomationRule = Extract<AutomationRule, { kind: "goal-loop" }>;
+
 type CssVariableStyle = CSSProperties & Record<string, string>;
+type WorkspaceDeviceRouteState = "idle" | "loading" | "error";
 
 const WORKSPACE_LAYOUT_STORAGE_KEY = "relay.workspace.layout.v1";
 const WORKSPACE_LEFT_MIN_WIDTH = 200;
@@ -129,6 +148,11 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const [composerValue, setComposerValue] = useState("");
   const [attachments, setAttachments] = useState<SessionAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [authSession, setAuthSession] = useState<RelayAuthSessionResponse["session"] | null>(null);
+  const [deviceDirectory, setDeviceDirectory] = useState<RelayDeviceDirectory | null>(null);
+  const [deviceRouteError, setDeviceRouteError] = useState<string | null>(null);
+  const [deviceRouteState, setDeviceRouteState] = useState<WorkspaceDeviceRouteState>("idle");
+  const [localRelayDevice, setLocalRelayDevice] = useState<RelayDevice | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSessionsLoading, setIsSessionsLoading] = useState(true);
   const [isActiveSessionLoading, setIsActiveSessionLoading] = useState(false);
@@ -137,6 +161,8 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [sessionMemories, setSessionMemories] = useState<TimelineMemory[]>([]);
   const [allMemories, setAllMemories] = useState<TimelineMemory[]>([]);
+  const [automationRules, setAutomationRules] = useState<AutomationRule[]>([]);
+  const [isAutomationRulesLoading, setIsAutomationRulesLoading] = useState(false);
   const [isSidePanelCollapsed, setIsSidePanelCollapsed] = useState(true);
   const [sidePanelMode, setSidePanelMode] = useState<WorkspaceSidePanelMode>("summary");
   const [archiveCandidate, setArchiveCandidate] = useState<Session | null>(null);
@@ -218,6 +244,22 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     () => createWorkspaceAutomationPrompt(activeSession, linkedFiles, language),
     [activeSession, language, linkedFiles],
   );
+  const currentSessionGoalAutomations = useMemo(() => {
+    if (!activeSession) {
+      return [];
+    }
+
+    return automationRules.filter(
+      (item): item is SessionGoalAutomationRule =>
+        item.kind === "goal-loop" &&
+        item.actionType === "continue-session" &&
+        item.sessionId === activeSession.id,
+    );
+  }, [activeSession, automationRules]);
+  const automationActionCount = useMemo(() => {
+    const baseCount = activeSession ? 2 : 1;
+    return baseCount + currentSessionGoalAutomations.length;
+  }, [activeSession, currentSessionGoalAutomations.length]);
   const groupedSessionMemories = useMemo(() => groupMemoriesByDate(sessionMemories), [sessionMemories]);
   const mentionCandidates = useMemo(
     () => buildMentionCandidates(sessions, allMemories, activeSessionId),
@@ -265,6 +307,18 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
     return style;
   }, [layoutWidths.sidepanelPrimary, workspaceLayout.workspaceSidepanelPrimaryWidth]);
+  const defaultRelayDevice =
+    deviceDirectory?.items.find((item) => item.id === deviceDirectory.defaultDeviceId) ?? null;
+  const isUsingDefaultRelayDevice =
+    !!defaultRelayDevice && !!localRelayDevice && defaultRelayDevice.localDeviceId === localRelayDevice.id;
+  const workspaceDeviceStatusText =
+    deviceRouteState === "loading" && authSession?.method === "github"
+      ? messages.workspace.deviceRouteLoading
+      : authSession?.method === "github" && defaultRelayDevice
+        ? isUsingDefaultRelayDevice
+          ? messages.workspace.deviceRouteReady
+          : messages.workspace.deviceRouteMismatch
+        : messages.workspace.deviceRouteUnknown;
 
   const loadSessionDetail = useCallback(async (sessionId: string) => {
     const cachedSession = sessionCacheRef.current.get(sessionId);
@@ -307,6 +361,27 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     }
   }, [bridgeOfflineMessage]);
 
+  const loadAutomationRules = useCallback(async () => {
+    setIsAutomationRulesLoading(true);
+
+    try {
+      const automationResponse = await listAutomations();
+      setAutomationRules(automationResponse.items);
+    } catch (automationError) {
+      setError(automationError instanceof Error ? automationError.message : bridgeOfflineMessage);
+      setAutomationRules([]);
+    } finally {
+      setIsAutomationRulesLoading(false);
+    }
+  }, [bridgeOfflineMessage]);
+
+  const refreshAutomationRulesInBackground = useCallback(async () => {
+    try {
+      const automationResponse = await listAutomations();
+      setAutomationRules(automationResponse.items);
+    } catch {}
+  }, []);
+
   const refreshSessionDetailInBackground = useCallback(async (sessionId: string) => {
     try {
       const sessionDetail = await getSession(sessionId, { fresh: true });
@@ -346,6 +421,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
       if (event.type === "thread.list.changed") {
         void refreshSessionListInBackground(currentSessionId);
+        void refreshAutomationRulesInBackground();
         return;
       }
 
@@ -362,18 +438,21 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         event.type === "thread.deleted_or_missing"
       ) {
         void refreshSessionDetailInBackground(currentSessionId);
+        void refreshAutomationRulesInBackground();
       }
     },
-    [refreshSessionDetailInBackground, refreshSessionListInBackground],
+    [refreshAutomationRulesInBackground, refreshSessionDetailInBackground, refreshSessionListInBackground],
   );
 
   const refreshWorkspaceData = useCallback(async (nextSessionId?: string) => {
     setIsLoading(true);
     setIsSessionsLoading(true);
+    setIsAutomationRulesLoading(true);
     setError(null);
 
     const workspacePromise = listWorkspaces();
     const sessionsPromise = listSessions();
+    const automationsPromise = listAutomations().catch(() => ({ items: [] as AutomationRule[] }));
 
     try {
       const workspaceData = await workspacePromise;
@@ -395,6 +474,10 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       const sessionData = await sessionsPromise;
       setSessions(sessionData.items);
       setIsSessionsLoading(false);
+
+      const automationData = await automationsPromise;
+      setAutomationRules(automationData.items);
+      setIsAutomationRulesLoading(false);
 
       const targetSessionId = nextSessionId ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id;
       setActiveSessionId(targetSessionId ?? null);
@@ -432,11 +515,14 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       setActiveSessionId(null);
       setActiveSession(null);
       setSessionMemories([]);
+      setAutomationRules([]);
       setFileTree(null);
       setIsSessionsLoading(false);
+      setIsAutomationRulesLoading(false);
       setIsActiveSessionLoading(false);
     } finally {
       setIsLoading(false);
+      setIsAutomationRulesLoading(false);
     }
   }, [bridgeOfflineMessage, loadSessionDetail, refreshSessionDetailInBackground, refreshSessionListInBackground]);
 
@@ -445,12 +531,108 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   }, [refreshWorkspaceData, language]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadWorkspaceDeviceRoute() {
+      try {
+        const sessionResponse = await fetch("/api/auth/session", { cache: "no-store" });
+
+        if (!sessionResponse.ok) {
+          throw new Error("Failed to load the current Relay session.");
+        }
+
+        const authData = (await sessionResponse.json()) as RelayAuthSessionResponse;
+
+        if (cancelled) {
+          return;
+        }
+
+        setAuthSession(authData.session);
+
+        if (authData.session?.method === "github" && authData.session.userId) {
+          setDeviceRouteState("loading");
+
+          try {
+            const result = await ensureCurrentGitHubDeviceReady();
+
+            if (cancelled) {
+              return;
+            }
+
+            setLocalRelayDevice(result.localDevice);
+            setDeviceDirectory(result.directory);
+            setDeviceRouteError(null);
+            setDeviceRouteState("idle");
+          } catch (routeError) {
+            if (cancelled) {
+              return;
+            }
+
+            setDeviceRouteError(routeError instanceof Error ? routeError.message : "Failed to resolve Relay device route.");
+            setDeviceRouteState("error");
+
+            const [localDeviceResponse, directory] = await Promise.allSettled([getLocalDevice(), loadDeviceDirectory()]);
+
+            if (cancelled) {
+              return;
+            }
+
+            if (localDeviceResponse.status === "fulfilled") {
+              setLocalRelayDevice(localDeviceResponse.value.item);
+            }
+
+            if (directory.status === "fulfilled") {
+              setDeviceDirectory(directory.value);
+            }
+          }
+
+          return;
+        }
+
+        setDeviceRouteState("idle");
+        setDeviceDirectory(null);
+        setDeviceRouteError(null);
+
+        try {
+          const localDeviceResponse = await getLocalDevice();
+
+          if (!cancelled) {
+            setLocalRelayDevice(localDeviceResponse.item);
+          }
+        } catch {
+          if (!cancelled) {
+            setLocalRelayDevice(null);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setDeviceRouteState("error");
+        }
+      }
+    }
+
+    void loadWorkspaceDeviceRoute();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!activeSessionId) {
       return;
     }
 
     return subscribeRuntimeEvents({ sessionId: activeSessionId }, handleRealtimeEvent, () => {});
   }, [activeSessionId, handleRealtimeEvent]);
+
+  useEffect(() => {
+    if (sidePanelMode !== "automation") {
+      return;
+    }
+
+    void refreshAutomationRulesInBackground();
+  }, [refreshAutomationRulesInBackground, sidePanelMode]);
 
   useEffect(() => {
     if (!sessionContextMenu) {
@@ -627,8 +809,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       return;
     }
 
-    input.style.height = "0px";
-    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+    resetComposerInputHeight(input);
   }, [composerValue]);
 
   useEffect(() => {
@@ -963,6 +1144,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
     let materializedSessionId = originalSessionId;
     const pendingAttachments = attachments;
     setComposerValue("");
+    resetComposerInputHeight(composerInputRef.current);
     setAttachments([]);
     setSelectedMentions([]);
     setMentionQuery(null);
@@ -1326,6 +1508,53 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
           </div>
         </div>
 
+        {localRelayDevice || authSession?.method === "github" ? (
+          <section
+            aria-label={language === "zh" ? "当前设备目标" : "Current device target"}
+            className={`workspace-device-strip ${
+              authSession?.method === "github" && defaultRelayDevice && !isUsingDefaultRelayDevice
+                ? "workspace-device-strip-warning"
+                : ""
+            }`}
+          >
+            <div className="workspace-device-strip-main">
+              <div className="workspace-device-chip">
+                <span className="workspace-device-chip-label">{messages.workspace.currentDeviceLabel}</span>
+                <strong className="workspace-device-chip-value">
+                  {localRelayDevice?.name ?? messages.settings.loading}
+                </strong>
+              </div>
+              {authSession?.method === "github" ? (
+                <div className="workspace-device-chip">
+                  <span className="workspace-device-chip-label">{messages.workspace.defaultDeviceLabel}</span>
+                  <strong className="workspace-device-chip-value">
+                    {defaultRelayDevice?.name ?? messages.settings.notSet}
+                  </strong>
+                </div>
+              ) : null}
+            </div>
+            <p className="workspace-device-strip-copy">
+              {deviceRouteError && authSession?.method === "github" ? deviceRouteError : workspaceDeviceStatusText}
+            </p>
+          </section>
+        ) : null}
+
+        {currentSessionGoalAutomations.length > 0 ? (
+          <section
+            aria-label={language === "zh" ? "当前会话自动化状态" : "Current session automation status"}
+            className="workspace-goal-automation-strip"
+          >
+            {currentSessionGoalAutomations.map((rule) => (
+              <GoalAutomationStatusCard
+                key={rule.id}
+                language={language}
+                rule={rule}
+                variant="banner"
+              />
+            ))}
+          </section>
+        ) : null}
+
         <div className="workspace-log workspace-timeline" ref={timelineRef}>
           {error ? <div className="workspace-empty">{error}</div> : null}
           {!error && isSwitchingSession ? <div className="workspace-empty">{messages.workspace.loading}</div> : null}
@@ -1430,7 +1659,13 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
                     }
                   }
 
-                  if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing &&
+                    event.keyCode !== 229
+                  ) {
+                    event.preventDefault();
                     void handleRun();
                   }
                 }}
@@ -1703,8 +1938,37 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
               <section className="workspace-sidepanel-section">
                 <div className="workspace-sidepanel-subhead">
                   <span className="eyebrow">{messages.workspace.automationTab}</span>
-                  <span className="workspace-sidepanel-subhead-detail">{activeSession ? 2 : 1}</span>
+                  <span className="workspace-sidepanel-subhead-detail">{automationActionCount}</span>
                 </div>
+                {activeSession ? (
+                  <div className="workspace-sidepanel-section">
+                    <div className="workspace-sidepanel-subhead">
+                      <span className="eyebrow">{language === "zh" ? "当前会话状态" : "Current session status"}</span>
+                      <span className="workspace-sidepanel-subhead-detail">{currentSessionGoalAutomations.length}</span>
+                    </div>
+                    {isAutomationRulesLoading ? (
+                      <div className="workspace-sidepanel-empty">
+                        <p>{language === "zh" ? "正在加载关联自动化..." : "Loading linked automations..."}</p>
+                      </div>
+                    ) : null}
+                    {!isAutomationRulesLoading && currentSessionGoalAutomations.length === 0 ? (
+                      <div className="workspace-sidepanel-empty">
+                        <p>
+                          {language === "zh"
+                            ? "当前会话还没有关联的目标自动化。创建后，这里会直接显示是否完成、停在第几轮，以及最近结论。"
+                            : "This session has no linked goal automation yet. Once created, its completion state, turn progress, and latest conclusion will appear here."}
+                        </p>
+                      </div>
+                    ) : null}
+                    {!isAutomationRulesLoading && currentSessionGoalAutomations.length > 0 ? (
+                      <div className="workspace-actions-list">
+                        {currentSessionGoalAutomations.map((rule) => (
+                          <GoalAutomationStatusCard key={rule.id} language={language} rule={rule} />
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="workspace-actions-list">
                   {activeSession ? (
                     <button
@@ -1851,6 +2115,15 @@ function isTimelineNearBottom(element: HTMLDivElement, threshold = 32) {
   return remaining <= threshold;
 }
 
+function resetComposerInputHeight(input: HTMLTextAreaElement | null) {
+  if (!input) {
+    return;
+  }
+
+  input.style.height = "0px";
+  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+}
+
 function createOptimisticMessage(
   sessionId: string,
   role: Message["role"],
@@ -1858,6 +2131,7 @@ function createOptimisticMessage(
   sequence: number,
   status: MessageStatus = "completed",
   id = createClientMessageId(role),
+  meta?: Message["meta"],
 ): Message {
   const now = new Date().toISOString();
 
@@ -1867,6 +2141,7 @@ function createOptimisticMessage(
     role,
     content,
     status,
+    meta,
     sequence,
     createdAt: now,
     updatedAt: now,
@@ -1892,19 +2167,51 @@ const TimelineMessage = memo(
     { isCurrent, isHighlighted, message, onLinkClick },
     ref,
   ) {
-    const html = useMemo(() => renderMarkdown(message.content), [message.content]);
+    const html = useMemo(
+      () => (message.meta?.kind === "process" ? null : renderMarkdown(message.content)),
+      [message.content, message.meta?.kind],
+    );
+    const processMeta = message.meta?.kind === "process" ? message.meta.process : undefined;
 
     return (
       <article
-        className={`workspace-log-item workspace-log-item-${message.role} ${isHighlighted ? "workspace-log-item-highlighted" : ""}`}
+        className={`workspace-log-item workspace-log-item-${message.role} ${processMeta ? "workspace-log-item-process" : ""} ${isHighlighted ? "workspace-log-item-highlighted" : ""}`}
         data-message-id={message.id}
         ref={ref}
       >
-        <div className="workspace-log-top">
-          <span className="workspace-log-label">{message.role}</span>
-          <span className="workspace-log-detail">{formatMessageTime(message.createdAt)}</span>
-        </div>
-        <div className="workspace-log-content" dangerouslySetInnerHTML={{ __html: html }} onClick={onLinkClick} />
+        {processMeta ? (
+          <div className="workspace-process-card">
+            <div className="workspace-process-top">
+              <div className="workspace-process-head">
+                <span className={`workspace-process-phase workspace-process-phase-${processMeta.phase}`}>
+                  {processMeta.phase}
+                </span>
+                <strong className="workspace-process-title">
+                  {processMeta.label ?? PROCESS_TITLES[processMeta.phase]}
+                </strong>
+              </div>
+              <div className="workspace-process-meta">
+                <span className={`workspace-process-status workspace-process-status-${message.status ?? "completed"}`}>
+                  {formatProcessStatus(message.status)}
+                </span>
+                <span className="workspace-process-time">{formatMessageTime(message.createdAt)}</span>
+              </div>
+            </div>
+            {message.content.trim() ? (
+              <pre className="workspace-process-body">{message.content.trimEnd()}</pre>
+            ) : (
+              <div className="workspace-process-body workspace-process-body-empty">waiting for output</div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="workspace-log-top">
+              <span className="workspace-log-label">{message.role}</span>
+              <span className="workspace-log-detail">{formatMessageTime(message.createdAt)}</span>
+            </div>
+            <div className="workspace-log-content" dangerouslySetInnerHTML={{ __html: html ?? "" }} onClick={onLinkClick} />
+          </>
+        )}
       </article>
     );
   }),
@@ -1941,13 +2248,199 @@ function formatMessageTime(value: string) {
   }).format(date);
 }
 
+function GoalAutomationStatusCard({
+  language,
+  rule,
+  variant = "sidepanel",
+}: {
+  language: AppLanguage;
+  rule: SessionGoalAutomationRule;
+  variant?: "banner" | "sidepanel";
+}) {
+  const conclusion = getGoalAutomationConclusion(rule, language);
+
+  return (
+    <article
+      className={`workspace-action-card workspace-automation-status-card ${variant === "banner" ? "workspace-automation-status-card-banner" : ""}`}
+    >
+      <div className="workspace-automation-status-head">
+        <div className="workspace-automation-status-title">
+          {variant === "banner" ? (
+            <span className="workspace-automation-status-kicker">
+              {language === "zh" ? "自动化状态" : "Automation status"}
+            </span>
+          ) : null}
+          <strong>{rule.title}</strong>
+        </div>
+        <span className={`automation-status-pill automation-status-${getGoalAutomationTone(rule)}`}>
+          {formatGoalAutomationState(rule, language)}
+        </span>
+      </div>
+      <div className="workspace-automation-status-detail-grid">
+        <div className="workspace-automation-status-detail">
+          <span>{language === "zh" ? "进度" : "Progress"}</span>
+          <strong>{formatGoalAutomationProgress(rule, language)}</strong>
+        </div>
+        <div className="workspace-automation-status-detail">
+          <span>{language === "zh" ? "结论" : "Conclusion"}</span>
+          <strong>{conclusion ?? (language === "zh" ? "暂无明确结论。" : "No conclusion yet.")}</strong>
+        </div>
+      </div>
+      <div className="workspace-automation-status-meta">
+        <span>{getGoalAutomationSessionModeLabel(rule, language)}</span>
+        <span>{getGoalAutomationLastRunLabel(rule, language)}</span>
+      </div>
+    </article>
+  );
+}
+
+function formatGoalAutomationState(rule: SessionGoalAutomationRule, language: AppLanguage) {
+  if (rule.runStatus === "running") {
+    return language === "zh" ? "运行中" : "running";
+  }
+
+  if (rule.stopReason === "completed") {
+    return language === "zh" ? "已完成" : "completed";
+  }
+
+  if (rule.stopReason === "failed" || rule.runStatus === "failed") {
+    return language === "zh" ? "失败" : "failed";
+  }
+
+  if (rule.stopReason === "stopped_by_user") {
+    return language === "zh" ? "已停止" : "stopped";
+  }
+
+  if (rule.stopReason === "max_turns_reached") {
+    return language === "zh" ? "达到轮次上限" : "max turns";
+  }
+
+  if (rule.stopReason === "max_duration_reached") {
+    return language === "zh" ? "达到时长上限" : "max duration";
+  }
+
+  if (rule.status === "paused") {
+    return language === "zh" ? "已暂停" : "paused";
+  }
+
+  return language === "zh" ? "待运行" : "idle";
+}
+
+function getGoalAutomationTone(rule: SessionGoalAutomationRule) {
+  if (rule.runStatus === "running") {
+    return "running";
+  }
+
+  if (rule.stopReason === "completed") {
+    return "completed";
+  }
+
+  if (rule.stopReason === "failed" || rule.runStatus === "failed") {
+    return "failed";
+  }
+
+  if (rule.stopReason === "stopped_by_user" || rule.stopReason === "max_turns_reached" || rule.stopReason === "max_duration_reached") {
+    return "stopped";
+  }
+
+  return rule.status === "paused" ? "paused" : "active";
+}
+
+function formatGoalAutomationProgress(rule: SessionGoalAutomationRule, language: AppLanguage) {
+  const turns = `${rule.currentTurnCount}/${rule.maxTurns}`;
+
+  if (rule.runStatus === "running") {
+    return language === "zh" ? `当前进度 ${turns} 轮，正在继续推进。` : `Current progress ${turns} turns and still running.`;
+  }
+
+  if (rule.stopReason === "completed") {
+    return language === "zh" ? `已在 ${turns} 轮内完成。` : `Completed within ${turns} turns.`;
+  }
+
+  if (rule.stopReason === "failed") {
+    return language === "zh" ? `运行失败，结束于 ${turns} 轮。` : `Failed after ${turns} turns.`;
+  }
+
+  if (rule.stopReason === "stopped_by_user") {
+    return language === "zh" ? `已手动停止，结束于 ${turns} 轮。` : `Stopped by user after ${turns} turns.`;
+  }
+
+  if (rule.stopReason === "max_turns_reached") {
+    return language === "zh" ? `达到轮次上限，停在 ${turns} 轮。` : `Stopped at the max turn limit of ${turns}.`;
+  }
+
+  if (rule.stopReason === "max_duration_reached") {
+    return language === "zh" ? `达到时长上限，停在 ${turns} 轮。` : `Stopped at the max duration after ${turns} turns.`;
+  }
+
+  return language === "zh"
+    ? `尚未开始。最多 ${rule.maxTurns} 轮 / ${rule.maxDurationMinutes} 分钟。`
+    : `Not started yet. Up to ${rule.maxTurns} turns / ${rule.maxDurationMinutes} minutes.`;
+}
+
+function getGoalAutomationConclusion(rule: SessionGoalAutomationRule, language: AppLanguage) {
+  if (rule.lastEvaluationReason?.trim()) {
+    return rule.lastEvaluationReason.trim();
+  }
+
+  if (rule.lastError?.trim()) {
+    return rule.lastError.trim();
+  }
+
+  if (rule.lastAssistantSummary?.trim()) {
+    return language === "zh"
+      ? `最近结论：${rule.lastAssistantSummary.trim()}`
+      : `Latest conclusion: ${rule.lastAssistantSummary.trim()}`;
+  }
+
+  return null;
+}
+
+function getGoalAutomationSessionModeLabel(rule: SessionGoalAutomationRule, language: AppLanguage) {
+  if (rule.targetSessionMode === "existing-session") {
+    return language === "zh" ? "绑定当前会话" : "bound to current session";
+  }
+
+  return language === "zh" ? "专用自动化会话" : "dedicated automation session";
+}
+
+function getGoalAutomationLastRunLabel(rule: SessionGoalAutomationRule, language: AppLanguage) {
+  if (!rule.lastRunAt) {
+    return language === "zh" ? "尚未运行" : "not run yet";
+  }
+
+  return language === "zh"
+    ? `最近运行 ${formatMessageTime(rule.lastRunAt)}`
+    : `last run ${formatMessageTime(rule.lastRunAt)}`;
+}
+
+function formatProcessStatus(status: MessageStatus | undefined) {
+  if (status === "streaming") {
+    return "running";
+  }
+
+  if (status === "error") {
+    return "failed";
+  }
+
+  return "done";
+}
+
 function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assistantMessageId: string) {
   if (!session) {
     return session;
   }
 
+  if (event.type === "process.started") {
+    return upsertProcessMessage(session, assistantMessageId, event);
+  }
+
   if (event.type === "process.delta") {
     return upsertProcessMessage(session, assistantMessageId, event);
+  }
+
+  if (event.type === "process.completed") {
+    return completeProcessMessage(session, assistantMessageId, event);
   }
 
   if (event.type === "message.delta") {
@@ -2041,11 +2534,13 @@ function updateMessageStatus(message: Message, status: MessageStatus, updatedAt 
 function upsertProcessMessage(
   session: Session,
   assistantMessageId: string,
-  event: Extract<RuntimeEvent, { type: "process.delta" }>,
+  event: Extract<RuntimeEvent, { type: "process.delta" | "process.started" }>,
 ) {
-  const processMessageId = `${assistantMessageId}:${event.phase}`;
+  const processMessageId = `${assistantMessageId}:process:${event.phase}:${event.itemId}`;
   const existingMessage = session.messages.find((message) => message.id === processMessageId);
-  const nextContent = appendProcessContent(existingMessage?.content ?? "", event.phase, event.delta);
+  const nextContent = event.type === "process.started"
+    ? createInitialProcessContent(event)
+    : appendProcessContent(existingMessage?.content ?? "", event.phase, event.delta);
 
   if (existingMessage) {
     return {
@@ -2057,6 +2552,14 @@ function upsertProcessMessage(
               {
                 ...message,
                 content: nextContent,
+                meta: {
+                  kind: "process",
+                  process: {
+                    itemId: event.itemId,
+                    phase: event.phase,
+                    label: event.type === "process.started" ? event.label : message.meta?.process?.label,
+                  },
+                },
               },
               "streaming",
               event.createdAt,
@@ -2074,6 +2577,14 @@ function upsertProcessMessage(
     Math.max(1, session.messages.length),
     "streaming",
     processMessageId,
+    {
+      kind: "process",
+      process: {
+        itemId: event.itemId,
+        phase: event.phase,
+        label: event.type === "process.started" ? event.label : PROCESS_TITLES[event.phase],
+      },
+    },
   );
   nextMessage.createdAt = event.createdAt;
   nextMessage.updatedAt = event.createdAt;
@@ -2089,6 +2600,24 @@ function upsertProcessMessage(
   };
 }
 
+function completeProcessMessage(
+  session: Session,
+  assistantMessageId: string,
+  event: Extract<RuntimeEvent, { type: "process.completed" }>,
+) {
+  const processMessageId = `${assistantMessageId}:process:${event.phase}:${event.itemId}`;
+
+  return {
+    ...session,
+    updatedAt: event.createdAt,
+    messages: session.messages.map((message) =>
+      message.id === processMessageId
+        ? updateMessageStatus(message, "completed", event.createdAt)
+        : message,
+    ),
+  };
+}
+
 function appendProcessContent(
   current: string,
   phase: Extract<RuntimeEvent, { type: "process.delta" }>["phase"],
@@ -2099,15 +2628,19 @@ function appendProcessContent(
     return current;
   }
 
-  const title = PROCESS_TITLES[phase];
-  const sectionHeader = `**${title}**\n`;
-  const sectionPrefix = current ? "\n\n" : "";
-
-  if (!current.includes(sectionHeader)) {
-    return `${current}${sectionPrefix}${sectionHeader}${normalizedDelta}`;
+  if (!current) {
+    return normalizedDelta;
   }
 
   return `${current}${normalizedDelta}`;
+}
+
+function createInitialProcessContent(event: Extract<RuntimeEvent, { type: "process.started" }>) {
+  if (event.phase === "command" && event.label) {
+    return `$ ${event.label}\n`;
+  }
+
+  return "";
 }
 
 function resequenceMessages(messages: Message[]) {

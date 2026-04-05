@@ -5,13 +5,13 @@
 # 全局界面语言：zh / en
 language = "zh"
 
-# 全局主题：dark / light
-theme = "dark"
+# 全局主题：dark / light / tea / linen
+theme = "light"
 
 # 界面密度：compact / comfortable
 # compact = 当前默认的紧凑布局
 # comfortable = 更大的字号、更松的间距
-density = "compact"
+density = "comfortable"
 
 [font]
 # UI 正文字体
@@ -36,6 +36,9 @@ workspaceLeftWidth = "240px"
 # workspace 页面中间主区域的最小宽度
 workspaceCenterMinWidth = "360px"
 
+# workspace 页面中间对话区的横向内边距
+workspaceCenterXPadding = "56px"
+
 # workspace 页面右侧 context 面板宽度
 workspaceRightWidth = "min(50vw, 720px)"
 
@@ -54,6 +57,12 @@ sessionsLeftWidth = "220px"
 
 # sessions 页面右侧 memory copilot 宽度
 sessionsRightWidth = "360px"
+
+# automation 页面左侧规则列表宽度
+automationListWidth = "320px"
+
+# automation 页面右侧详情区最小宽度
+automationDetailMinWidth = "780px"
 
 # memories 页面左侧时间轴比例
 memoriesLeftRatio = "0.72fr"
@@ -88,3 +97,48 @@ titleSm = "0.94rem"
 
 # 页面级标题
 title = "1rem"
+
+[overview]
+# 首页 / about 概览页品牌字尺寸
+heroBrandSize = "clamp(2.5rem, 5.4vw, 4.4rem)"
+
+# 首页 / about 概览页主标题尺寸
+heroTitleSize = "clamp(1.5rem, 3.3vw, 2.7rem)"
+
+# 首页 / about 概览页主标题移动端尺寸
+heroTitleSizeMobile = "clamp(1.65rem, 7.4vw, 2.35rem)"
+
+# 首页 / about 概览页说明文字尺寸
+heroBodySize = "clamp(0.94rem, 1.18vw, 1rem)"
+
+# 首页 / about 概览页章节标题尺寸
+sectionTitleSize = "clamp(1.08rem, 1.55vw, 1.5rem)"
+
+[shape]
+# 常规卡片/消息块圆角
+radiusMd = "10px"
+
+# 胶囊按钮/状态标签圆角
+radiusPill = "999px"
+
+[effects]
+# 浮层毛玻璃强度
+blurStrong = "18px"
+
+# workspace 底部输入区阴影
+shadowComposer = "0 -12px 24px rgba(82, 88, 96, 0.08)"
+
+# 底部吸附类面板阴影
+shadowRaised = "0 -16px 36px rgba(82, 88, 96, 0.06)"
+
+# 抽屉类面板阴影
+shadowDrawer = "0 -18px 48px rgba(82, 88, 96, 0.08)"
+
+# 下拉/菜单类浮层阴影
+shadowFloating = "0 18px 40px rgba(82, 88, 96, 0.08)"
+
+# 弹窗/对话框阴影
+shadowDialog = "0 16px 40px rgba(82, 88, 96, 0.1)"
+
+# 大型弹窗阴影
+shadowDialogStrong = "0 24px 64px rgba(82, 88, 96, 0.12)"

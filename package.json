@@ -10,16 +10,12 @@
     "dev:up": "bash ./dev-up.sh",
     "dev:down": "bash ./dev-down.sh",
     "build": "pnpm --filter web build",
-    "desktop:dev": "electron apps/desktop/main.cjs",
-    "desktop:pack": "pnpm --filter web build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config apps/desktop/electron-builder.json --mac dir",
+    "desktop:pack": "bash ./apps/desktop/pack-launcher.sh",
     "lint": "pnpm --filter web lint",
     "test": "pnpm -r test"
   },
   "devDependencies": {
-    "electron": "^41.1.1",
-    "electron-builder": "^26.8.1",
     "tsx": "^4.20.6",
-    "vitest": "^3.2.4",
-    "wait-on": "^9.0.4"
+    "vitest": "^3.2.4"
   }
 }

@@ -78,6 +78,28 @@ describe("SessionsClient", () => {
       expect(bridgeMocks.generateSessionMemory).toHaveBeenNthCalledWith(1, "session-1", { force: false });
       expect(bridgeMocks.generateSessionMemory).toHaveBeenNthCalledWith(2, "session-1", { force: true });
     });
+
+    expect(screen.getByText("已重新整理并更新记忆。")).toBeTruthy();
+  });
+
+  it("shows a clear hint when manual memory generation returns no item", async () => {
+    bridgeMocks.generateSessionMemory.mockResolvedValue({
+      ok: false,
+      item: null,
+    });
+
+    render(<SessionsClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(bridgeMocks.getSessionMemories).toHaveBeenCalledWith("session-1");
+    });
+
+    await user.click(screen.getByRole("button", { name: "保存记忆" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/当前 session 暂时无法生成记忆/)).toBeTruthy();
+    });
   });
 
   it("switches sessions without reloading the whole page data", async () => {

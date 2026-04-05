@@ -24,6 +24,7 @@ export function SessionsClient({ language }: SessionsClientProps) {
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
   const [isMemoriesLoading, setIsMemoriesLoading] = useState(false);
   const [isGeneratingMemory, setIsGeneratingMemory] = useState(false);
+  const [memoryActionMessage, setMemoryActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const groupedMemories = useMemo(() => groupMemoriesByDate(sessionMemories), [sessionMemories]);
@@ -123,6 +124,7 @@ export function SessionsClient({ language }: SessionsClientProps) {
 
     try {
       setError(null);
+      setMemoryActionMessage(null);
       setIsSwitchingSession(true);
       setActiveSessionId(sessionId);
       activeSessionIdRef.current = sessionId;
@@ -142,9 +144,17 @@ export function SessionsClient({ language }: SessionsClientProps) {
 
     try {
       setError(null);
+      setMemoryActionMessage(null);
       setIsGeneratingMemory(true);
-      await generateSessionMemory(activeSession.id, { force });
+      const response = await generateSessionMemory(activeSession.id, { force });
       await loadSessionMemories(activeSession.id);
+
+      if (response.item) {
+        setMemoryActionMessage(force ? "已重新整理并更新记忆。" : "已生成记忆。");
+        return;
+      }
+
+      setMemoryActionMessage("当前 session 暂时无法生成记忆，可能是有效轮次还不够，或生成过程没有返回结果。");
     } catch (memoryError) {
       setError(memoryError instanceof Error ? memoryError.message : bridgeOfflineMessage);
     } finally {
@@ -238,8 +248,15 @@ export function SessionsClient({ language }: SessionsClientProps) {
               <div className="memory-chat-role">theme</div>
               <p>{activeSession?.title ?? "current session"}</p>
             </article>
+            {activeSession ? (
+              <article className="memory-chat-item memory-chat-item-meta">
+                <div className="memory-chat-role">checkpoint</div>
+                <p>{`${activeSession.turnCount} turns in this session`}</p>
+              </article>
+            ) : null}
           </div>
 
+          {memoryActionMessage ? <div className="memory-status-banner">{memoryActionMessage}</div> : null}
           {isMemoriesLoading ? <div className="workspace-empty">{messages.workspace.loading}</div> : null}
           {!isMemoriesLoading && groupedMemories.length === 0 ? (
             <div className="workspace-empty">no timeline memories yet for this session</div>

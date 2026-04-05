@@ -4,6 +4,7 @@ import { type ClipboardEvent, useCallback, useEffect, useRef, useState, useTrans
 
 import type { Message, MessageStatus, RuntimeEvent, Session, Workspace } from "@relay/shared-types";
 import { MobileComposer } from "@/components/mobile/mobile-composer";
+import { MobileLayoutDebugPanel } from "@/components/mobile/mobile-layout-debug-panel";
 import { MobileHeader } from "@/components/mobile/mobile-header";
 import { MobileMemoriesDrawer } from "@/components/mobile/mobile-memories-drawer";
 import { MobileSessionDrawer } from "@/components/mobile/mobile-session-drawer";
@@ -25,6 +26,14 @@ import {
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, SessionAttachment } from "@/lib/api/bridge";
 import { getClipboardImageFiles, readClipboardImageFiles } from "@/lib/clipboard";
+import {
+  captureMobileLayoutSnapshot,
+  createMobileLayoutDiagnosticsStore,
+  describeDiagnosticTarget,
+  isMobileLayoutDiagnosticsEnabled,
+  type MobileLayoutDiagnosticEntry,
+  type MobileLayoutDiagnosticsStore,
+} from "@/lib/debug/mobile-layout-diagnostics";
 
 type MobilePanelKey = "workspaces" | "sessions" | "memories";
 
@@ -45,9 +54,13 @@ export function MobileShell({
 }: MobileShellProps) {
   const messages = getMessages(language);
   const bridgeOfflineMessage = messages.workspace.bridgeOffline;
+  const appRef = useRef<HTMLElement | null>(null);
   const topbarRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerFocusStabilizeTimerRef = useRef<number | null>(null);
+  const composerFocusRafRef = useRef<number | null>(null);
+  const diagnosticsStoreRef = useRef<MobileLayoutDiagnosticsStore | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>(initialWorkspaces);
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(initialActiveWorkspace);
@@ -62,12 +75,15 @@ export function MobileShell({
   const [manualWorkspacePath, setManualWorkspacePath] = useState("");
   const [restoredFromCache, setRestoredFromCache] = useState(false);
   const [isRunActive, setIsRunActive] = useState(false);
+  const [diagnosticEntries, setDiagnosticEntries] = useState<MobileLayoutDiagnosticEntry[]>([]);
+  const [isDiagnosticsEnabled, setIsDiagnosticsEnabled] = useState(false);
   const [isRunning, startRunTransition] = useTransition();
   const hasInitialSnapshot = initialWorkspaces.length > 0 || initialSessions.length > 0 || initialActiveSession !== null;
   const activeSessionId = activeSession?.id ?? null;
   const activeMessageCount = activeSession?.messages.length ?? 0;
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const currentMessageRef = useRef<HTMLElement | null>(null);
+  const isUnmountedRef = useRef(false);
   const sessionCacheRef = useRef(
     new Map<string, Session>(initialActiveSession ? [[initialActiveSession.id, initialActiveSession]] : []),
   );
@@ -75,23 +91,115 @@ export function MobileShell({
   const favoriteWorkspaceStorageKey = "relay.mobile.favorite-workspaces.v1";
   const [starredWorkspaceIds, setStarredWorkspaceIds] = useState<string[]>([]);
 
-  const syncLayoutMetrics = useCallback(() => {
-    if (typeof document === "undefined") {
+  const recordLayoutDiagnostic = useCallback((type: string, note = "", target?: EventTarget | null) => {
+    const diagnosticsStore = diagnosticsStoreRef.current;
+    if (!diagnosticsStore || typeof document === "undefined" || typeof window === "undefined") {
       return;
     }
 
-    const root = document.documentElement;
+    diagnosticsStore.record({
+      note,
+      snapshot: captureMobileLayoutSnapshot({
+        appRoot: appRef.current,
+        composer: composerRef.current,
+        input: composerInputRef.current,
+        timeline: timelineRef.current,
+        topbar: topbarRef.current,
+      }),
+      target: describeDiagnosticTarget(target ?? document.activeElement),
+      type,
+    });
+  }, []);
+
+  const clearComposerFocusStabilization = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (composerFocusStabilizeTimerRef.current !== null) {
+      window.clearTimeout(composerFocusStabilizeTimerRef.current);
+      composerFocusStabilizeTimerRef.current = null;
+    }
+    if (composerFocusRafRef.current !== null) {
+      window.cancelAnimationFrame(composerFocusRafRef.current);
+      composerFocusRafRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    isUnmountedRef.current = false;
+    return () => {
+      isUnmountedRef.current = true;
+      clearComposerFocusStabilization();
+    };
+  }, [clearComposerFocusStabilization]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const enabled = isMobileLayoutDiagnosticsEnabled(window.location.search, window.localStorage);
+    setIsDiagnosticsEnabled(enabled);
+
+    if (!enabled) {
+      diagnosticsStoreRef.current = null;
+      setDiagnosticEntries([]);
+      return;
+    }
+
+    const diagnosticsStore = createMobileLayoutDiagnosticsStore({
+      onChange: setDiagnosticEntries,
+      sessionStorage: window.sessionStorage,
+    });
+    diagnosticsStoreRef.current = diagnosticsStore;
+    setDiagnosticEntries(diagnosticsStore.getEntries());
+    recordLayoutDiagnostic("diagnostics.enabled", "mobile layout diagnostics ready");
+
+    return () => {
+      if (diagnosticsStoreRef.current === diagnosticsStore) {
+        diagnosticsStoreRef.current = null;
+      }
+    };
+  }, [recordLayoutDiagnostic]);
+
+  const syncLayoutMetrics = useCallback((reason = "") => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const appRoot = appRef.current;
+    if (!appRoot) {
+      return;
+    }
+
     const topbarHeight = topbarRef.current?.offsetHeight ?? 0;
     const composerHeight = composerRef.current?.offsetHeight ?? 0;
 
     if (topbarHeight > 0) {
-      root.style.setProperty("--mobile-topbar-height", `${topbarHeight}px`);
+      appRoot.style.setProperty("--mobile-topbar-height", `${topbarHeight}px`);
     }
 
     if (composerHeight > 0) {
-      root.style.setProperty("--mobile-composer-height", `${composerHeight}px`);
+      appRoot.style.setProperty("--mobile-composer-height", `${composerHeight}px`);
     }
-  }, []);
+
+    if (composerHeight > 0) {
+      const viewport = window.visualViewport;
+      const viewportBottom = viewport ? Math.min(window.innerHeight, viewport.height + viewport.offsetTop) : window.innerHeight;
+      const iosBottomBoost = parseCssPixelValue(getComputedStyle(appRoot).getPropertyValue("--mobile-ios-bottom-boost")) ?? 0;
+      const keyboardFallbackReserve =
+        parseCssPixelValue(getComputedStyle(appRoot).getPropertyValue("--mobile-keyboard-fallback-reserve")) ?? 0;
+      const composerTop = Math.max(
+        topbarHeight,
+        viewportBottom - composerHeight - iosBottomBoost - keyboardFallbackReserve,
+      );
+      appRoot.style.setProperty("--mobile-composer-top", `${composerTop}px`);
+    }
+    if (reason) {
+      recordLayoutDiagnostic("layout.sync", reason);
+    }
+  }, [recordLayoutDiagnostic]);
 
   const refreshMobileData = useCallback(async (nextSessionId?: string, options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -103,25 +211,41 @@ export function MobileShell({
       const [workspaceData, sessionData] = await Promise.all([listWorkspaces(), listSessions()]);
       const currentWorkspace = workspaceData.active;
 
+      if (isUnmountedRef.current) {
+        return;
+      }
+
       setWorkspaces(workspaceData.items);
       setActiveWorkspace(currentWorkspace);
       setSessions(sessionData.items);
 
       const targetSessionId = nextSessionId ?? sessionData.preferredSessionId ?? sessionData.items[0]?.id;
       if (!targetSessionId) {
+        if (isUnmountedRef.current) {
+          return;
+        }
         setActiveSession(null);
         return;
       }
 
       const detail = await loadSessionDetail(targetSessionId, sessionCacheRef.current);
+      if (isUnmountedRef.current) {
+        return;
+      }
       setActiveSession(detail);
     } catch (loadError) {
+      if (isUnmountedRef.current) {
+        return;
+      }
       setError(loadError instanceof Error ? loadError.message : bridgeOfflineMessage);
       setWorkspaces([]);
       setSessions([]);
       setActiveWorkspace(null);
       setActiveSession(null);
     } finally {
+      if (isUnmountedRef.current) {
+        return;
+      }
       setPendingSessionId(null);
       setPendingWorkspaceId(null);
       if (!options?.silent) {
@@ -229,79 +353,172 @@ export function MobileShell({
   }, [starredWorkspaceIds]);
 
   useEffect(() => {
+    if (!isDiagnosticsEnabled) {
+      return;
+    }
+
+    const appRoot = appRef.current;
+    if (!appRoot) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      recordLayoutDiagnostic("pointer.down", `pointerType=${event.pointerType}`, event.target);
+    };
+
+    const handleTouchStart = (event: TouchEvent) => {
+      recordLayoutDiagnostic("touch.start", "touchstart", event.target);
+    };
+
+    appRoot.addEventListener("pointerdown", handlePointerDown, true);
+    appRoot.addEventListener("touchstart", handleTouchStart, true);
+
+    return () => {
+      appRoot.removeEventListener("pointerdown", handlePointerDown, true);
+      appRoot.removeEventListener("touchstart", handleTouchStart, true);
+    };
+  }, [isDiagnosticsEnabled, recordLayoutDiagnostic]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
-    const root = document.documentElement;
+    const appRoot = appRef.current;
+    if (!appRoot) {
+      return;
+    }
     const viewport = window.visualViewport;
     const userAgent = window.navigator.userAgent;
     const isAppleMobile = /iPhone|iPad|iPod/i.test(userAgent);
     const isSafari = /Safari/i.test(userAgent) && !/CriOS|FxiOS|EdgiOS|OPiOS/i.test(userAgent);
     const isIosSafari = isAppleMobile && isSafari;
+    const isWeChatWebView = /MicroMessenger/i.test(userAgent);
+    const hasTextInputFocus = () => {
+      const activeElement = document.activeElement;
+      if (!activeElement) {
+        return false;
+      }
 
-    const updateViewportOffset = () => {
+      if (activeElement instanceof HTMLTextAreaElement) {
+        return true;
+      }
+
+      if (activeElement instanceof HTMLInputElement) {
+        const nonTextTypes = new Set([
+          "button",
+          "checkbox",
+          "color",
+          "file",
+          "hidden",
+          "image",
+          "radio",
+          "range",
+          "reset",
+          "submit",
+        ]);
+        return !nonTextTypes.has(activeElement.type);
+      }
+
+      return activeElement instanceof HTMLElement && activeElement.isContentEditable;
+    };
+    const updateViewportOffset = (reason: string) => {
       const viewportHeight = viewport ? viewport.height + viewport.offsetTop : window.innerHeight;
-      root.style.setProperty("--mobile-app-height", `${viewportHeight}px`);
+      const bottomOffset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+      const textInputFocused = hasTextInputFocus();
+      const viewportShrank = viewport ? window.innerHeight - viewport.height > 24 : false;
+      const keyboardFallbackReserve =
+        isAppleMobile && textInputFocused && !viewportShrank
+          ? `${Math.round(
+              clamp(
+                window.innerHeight * (isWeChatWebView ? 0.22 : 0.16),
+                isWeChatWebView ? 148 : 108,
+                isWeChatWebView ? 196 : 156,
+              ),
+            )}px`
+          : "0px";
+      appRoot.style.setProperty("--mobile-app-height", `${viewportHeight}px`);
 
       if (!viewport) {
-        root.style.setProperty("--mobile-viewport-bottom-offset", "0px");
-        root.style.setProperty("--mobile-ios-bottom-boost", isIosSafari ? "52px" : "0px");
-        syncLayoutMetrics();
+        appRoot.style.setProperty("--mobile-viewport-bottom-offset", "0px");
+        appRoot.style.setProperty("--mobile-ios-bottom-boost", isIosSafari && textInputFocused ? "80px" : "0px");
+        appRoot.style.setProperty("--mobile-keyboard-fallback-reserve", keyboardFallbackReserve);
+        syncLayoutMetrics(`viewport:${reason}`);
+        recordLayoutDiagnostic("viewport.update", reason);
         return;
       }
 
-      const bottomOffset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
       const iosBottomBoost =
         isIosSafari
-          ? bottomOffset < 8
-            ? "56px"
+          ? textInputFocused
+            ? bottomOffset < 8
+              ? "80px"
+              : "48px"
             : bottomOffset < 48
               ? "22px"
               : "0px"
           : "0px";
 
-      root.style.setProperty("--mobile-viewport-bottom-offset", `${bottomOffset}px`);
-      root.style.setProperty("--mobile-ios-bottom-boost", iosBottomBoost);
-      syncLayoutMetrics();
+      appRoot.style.setProperty("--mobile-viewport-bottom-offset", `${bottomOffset}px`);
+      appRoot.style.setProperty("--mobile-ios-bottom-boost", iosBottomBoost);
+      appRoot.style.setProperty("--mobile-keyboard-fallback-reserve", keyboardFallbackReserve);
+      syncLayoutMetrics(`viewport:${reason}`);
+      recordLayoutDiagnostic("viewport.update", reason);
     };
 
-    updateViewportOffset();
+    const handleWindowResize = () => updateViewportOffset("window.resize");
+    const handleFocusIn = (event: FocusEvent) => {
+      updateViewportOffset("focusin");
+      recordLayoutDiagnostic("focus.in", "", event.target);
+    };
+    const handleFocusOut = (event: FocusEvent) => {
+      updateViewportOffset("focusout");
+      recordLayoutDiagnostic("focus.out", "", event.target);
+    };
+    const handleViewportResize = () => updateViewportOffset("visualViewport.resize");
+    const handleViewportScroll = () => updateViewportOffset("visualViewport.scroll");
+    const handleOrientationChange = () => updateViewportOffset("orientationchange");
+
+    updateViewportOffset("effect.mount");
 
     if (!viewport) {
-      window.addEventListener("resize", updateViewportOffset);
-      window.addEventListener("focusin", updateViewportOffset);
-      window.addEventListener("focusout", updateViewportOffset);
+      window.addEventListener("resize", handleWindowResize);
+      window.addEventListener("focusin", handleFocusIn);
+      window.addEventListener("focusout", handleFocusOut);
       return () => {
-        window.removeEventListener("resize", updateViewportOffset);
-        window.removeEventListener("focusin", updateViewportOffset);
-        window.removeEventListener("focusout", updateViewportOffset);
-        root.style.removeProperty("--mobile-app-height");
-        root.style.removeProperty("--mobile-viewport-bottom-offset");
-        root.style.removeProperty("--mobile-ios-bottom-boost");
+        window.removeEventListener("resize", handleWindowResize);
+        window.removeEventListener("focusin", handleFocusIn);
+        window.removeEventListener("focusout", handleFocusOut);
+        appRoot.style.removeProperty("--mobile-app-height");
+        appRoot.style.removeProperty("--mobile-composer-top");
+        appRoot.style.removeProperty("--mobile-viewport-bottom-offset");
+        appRoot.style.removeProperty("--mobile-ios-bottom-boost");
+        appRoot.style.removeProperty("--mobile-keyboard-fallback-reserve");
       };
     }
 
-    viewport.addEventListener("resize", updateViewportOffset);
-    viewport.addEventListener("scroll", updateViewportOffset);
-    window.addEventListener("orientationchange", updateViewportOffset);
-    window.addEventListener("focusin", updateViewportOffset);
-    window.addEventListener("focusout", updateViewportOffset);
+    viewport.addEventListener("resize", handleViewportResize);
+    viewport.addEventListener("scroll", handleViewportScroll);
+    window.addEventListener("orientationchange", handleOrientationChange);
+    window.addEventListener("focusin", handleFocusIn);
+    window.addEventListener("focusout", handleFocusOut);
 
     return () => {
-      viewport.removeEventListener("resize", updateViewportOffset);
-      viewport.removeEventListener("scroll", updateViewportOffset);
-      window.removeEventListener("orientationchange", updateViewportOffset);
-      window.removeEventListener("focusin", updateViewportOffset);
-      window.removeEventListener("focusout", updateViewportOffset);
-      root.style.removeProperty("--mobile-app-height");
-      root.style.removeProperty("--mobile-viewport-bottom-offset");
-      root.style.removeProperty("--mobile-ios-bottom-boost");
+      viewport.removeEventListener("resize", handleViewportResize);
+      viewport.removeEventListener("scroll", handleViewportScroll);
+      window.removeEventListener("orientationchange", handleOrientationChange);
+      window.removeEventListener("focusin", handleFocusIn);
+      window.removeEventListener("focusout", handleFocusOut);
+      appRoot.style.removeProperty("--mobile-app-height");
+      appRoot.style.removeProperty("--mobile-composer-top");
+      appRoot.style.removeProperty("--mobile-viewport-bottom-offset");
+      appRoot.style.removeProperty("--mobile-ios-bottom-boost");
+      appRoot.style.removeProperty("--mobile-keyboard-fallback-reserve");
     };
-  }, [syncLayoutMetrics]);
+  }, [recordLayoutDiagnostic, syncLayoutMetrics]);
 
   useEffect(() => {
-    syncLayoutMetrics();
+    syncLayoutMetrics("effect:initial-layout");
     if (typeof window === "undefined") {
       return;
     }
@@ -309,7 +526,7 @@ export function MobileShell({
     const resizeObserver = typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver(() => {
-          syncLayoutMetrics();
+          syncLayoutMetrics("resize-observer");
         });
 
     if (resizeObserver && topbarRef.current) {
@@ -319,10 +536,11 @@ export function MobileShell({
       resizeObserver.observe(composerRef.current);
     }
 
-    window.addEventListener("resize", syncLayoutMetrics);
+    const handleWindowResize = () => syncLayoutMetrics("window.resize.layout");
+    window.addEventListener("resize", handleWindowResize);
     return () => {
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", syncLayoutMetrics);
+      window.removeEventListener("resize", handleWindowResize);
     };
   }, [syncLayoutMetrics]);
 
@@ -530,11 +748,46 @@ export function MobileShell({
       return;
     }
 
+    recordLayoutDiagnostic("composer.focus", "textarea focus");
+    const isIosBrowser = /iPhone|iPad|iPod/i.test(window.navigator.userAgent);
+    const timeline = timelineRef.current;
+    const lockedScrollTop = timeline?.scrollTop ?? 0;
+    let stabilizationFrames = 0;
+
+    const stabilizeViewport = () => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      if (timeline) {
+        timeline.scrollTop = lockedScrollTop;
+      }
+
+      stabilizationFrames += 1;
+      if (stabilizationFrames < 4) {
+        composerFocusRafRef.current = window.requestAnimationFrame(stabilizeViewport);
+      } else {
+        composerFocusRafRef.current = null;
+      }
+    };
+
+    clearComposerFocusStabilization();
+
     window.setTimeout(() => {
-      syncLayoutMetrics();
+      syncLayoutMetrics("composer.focus.timeout");
       scrollToLatest();
       composerInputRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }, 140);
+
+    if (isIosBrowser) {
+      recordLayoutDiagnostic("composer.focus.stabilize", "ios scroll stabilization start");
+      composerFocusRafRef.current = window.requestAnimationFrame(stabilizeViewport);
+      composerFocusStabilizeTimerRef.current = window.setTimeout(() => {
+        composerFocusRafRef.current = window.requestAnimationFrame(stabilizeViewport);
+      }, 120);
+    }
+  }
+
+  function handleComposerBlur() {
+    recordLayoutDiagnostic("composer.blur", "textarea blur");
+    clearComposerFocusStabilization();
   }
 
   async function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -558,7 +811,7 @@ export function MobileShell({
     try {
       const uploaded = await Promise.all(imageFiles.map((file) => uploadSessionImage(activeSession.id, file)));
       setAttachments((current) => [...current, ...uploaded.map((item) => item.item)]);
-      syncLayoutMetrics();
+      syncLayoutMetrics("composer.paste.attachments");
     } catch (pasteError) {
       setError(pasteError instanceof Error ? pasteError.message : bridgeOfflineMessage);
     }
@@ -566,7 +819,7 @@ export function MobileShell({
 
   function handleRemoveAttachment(attachmentPath: string) {
     setAttachments((current) => current.filter((attachment) => attachment.path !== attachmentPath));
-    syncLayoutMetrics();
+    syncLayoutMetrics("composer.remove-attachment");
   }
 
   const statusLabel = error
@@ -598,11 +851,10 @@ export function MobileShell({
             : pendingSessionId === "__creating__"
               ? messages.mobile.creatingSession
               : pendingSessionId
-                ? messages.mobile.switchingSession
+            ? messages.mobile.switchingSession
                 : "";
-
   return (
-    <main className="mobile-app">
+    <main className="mobile-app" ref={appRef}>
       <div className="mobile-topbar" ref={topbarRef}>
         <MobileHeader
           actions={
@@ -635,12 +887,20 @@ export function MobileShell({
         messages={activeSession?.messages ?? []}
         timelineRef={timelineRef}
       />
-
+      {isDiagnosticsEnabled ? (
+        <MobileLayoutDebugPanel
+          entries={diagnosticEntries}
+          onClear={() => {
+            diagnosticsStoreRef.current?.clear();
+          }}
+        />
+      ) : null}
       <MobileComposer
         attachments={attachments}
         composerValue={composerValue}
         disabled={!activeSession}
         isRunning={isRunning}
+        onBlur={handleComposerBlur}
         onChange={setComposerValue}
         onFocus={handleComposerFocus}
         onPaste={handleComposerPaste}
@@ -753,6 +1013,25 @@ function createOptimisticMessage(
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function parseCssPixelValue(rawValue: string) {
+  const normalized = rawValue.trim();
+
+  if (!normalized.endsWith("px")) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(normalized.replace("px", ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function clamp(value: number, min: number, max: number) {
+  if (max < min) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
 }
 
 function applyStreamingEvent(session: Session | null, event: RuntimeEvent, assistantMessageId: string) {

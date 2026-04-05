@@ -75,8 +75,8 @@ export function TopNav({ language }: TopNavProps) {
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="brand-mark">relay</span>
-        <span className="brand-state">{messages.brandState}</span>
+        <span className="brand-mark" suppressHydrationWarning>Relay</span>
+        <span aria-hidden="true" className="brand-state" suppressHydrationWarning />
       </div>
       <div className="topbar-actions">
         <nav className="topnav" aria-label={messages.nav.primaryAriaLabel}>

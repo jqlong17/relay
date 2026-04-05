@@ -305,9 +305,9 @@ describe("runtime route", () => {
           delta: "Check paste handler.",
         }),
         expect.objectContaining({
-          type: "process.delta",
+          type: "process.started",
           phase: "command",
-          delta: "$ rg -n paste .\n",
+          label: "rg -n paste .",
         }),
         expect.objectContaining({
           type: "process.delta",
@@ -1030,7 +1030,7 @@ describe("runtime route", () => {
     ]);
   });
 
-  it("generates a timeline memory after reaching a 20-turn checkpoint", async () => {
+  it("generates a timeline memory after a configured 20-turn rule triggers", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runtime-memory-"));
     tempDirs.push(workspacePath);
     const threads = new Map<string, AppServerThread>();
@@ -1126,6 +1126,24 @@ describe("runtime route", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ localPath: workspacePath }),
     });
+
+    const createRuleResponse = await fetch(`http://127.0.0.1:${address.port}/automations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "goal-loop",
+        title: "按轮次自动整理",
+        actionType: "generate-timeline-memory",
+        triggerKind: "turn-interval",
+        triggerTurnInterval: 20,
+        targetSessionMode: "existing-session",
+        targetSessionId: "thread-runtime-memory-1",
+        maxTurns: 10,
+        maxDurationMinutes: 120,
+      }),
+    });
+
+    expect(createRuleResponse.status).toBe(200);
 
     const createSessionResponse = await fetch(`http://127.0.0.1:${address.port}/sessions`, {
       method: "POST",

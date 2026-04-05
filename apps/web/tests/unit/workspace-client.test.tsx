@@ -1,19 +1,21 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Message, Session, TimelineMemory, Workspace } from "@relay/shared-types";
+import type { AutomationRule, Message, Session, TimelineMemory, Workspace } from "@relay/shared-types";
 
 const bridgeMocks = vi.hoisted(() => ({
   archiveSession: vi.fn(),
   createSession: vi.fn(),
-    getFilePreview: vi.fn(),
-    getFileTree: vi.fn(),
-    getSession: vi.fn(),
-    getSessionMemories: vi.fn(),
-    listMemories: vi.fn(),
-    listSessions: vi.fn(),
-    listWorkspaces: vi.fn(),
+  getFilePreview: vi.fn(),
+  getFileTree: vi.fn(),
+  getLocalDevice: vi.fn(),
+  getSession: vi.fn(),
+  getSessionMemories: vi.fn(),
+  listAutomations: vi.fn(),
+  listMemories: vi.fn(),
+  listSessions: vi.fn(),
+  listWorkspaces: vi.fn(),
   openInFinder: vi.fn(),
   openWorkspace: vi.fn(),
   openWorkspacePicker: vi.fn(),
@@ -24,8 +26,16 @@ const bridgeMocks = vi.hoisted(() => ({
   subscribeRuntimeEvents: vi.fn(),
   uploadSessionImage: vi.fn(),
 }));
+const cloudDeviceMocks = vi.hoisted(() => ({
+  loadDeviceDirectory: vi.fn(),
+}));
+const deviceBootstrapMocks = vi.hoisted(() => ({
+  ensureCurrentGitHubDeviceReady: vi.fn(),
+}));
 
 vi.mock("@/lib/api/bridge", () => bridgeMocks);
+vi.mock("@/lib/api/cloud-devices", () => cloudDeviceMocks);
+vi.mock("@/lib/auth/device-bootstrap", () => deviceBootstrapMocks);
 
 import { WorkspaceClient } from "@/components/workspace-client";
 
@@ -38,6 +48,9 @@ describe("WorkspaceClient", () => {
     bridgeMocks.listWorkspaces.mockResolvedValue({
       items: [makeWorkspace({ id: "workspace-1", isActive: true })],
       active: makeWorkspace({ id: "workspace-1", isActive: true }),
+    });
+    bridgeMocks.getLocalDevice.mockResolvedValue({
+      item: makeLocalDevice(),
     });
     bridgeMocks.listSessions.mockResolvedValue({
       items: [makeSessionSummary({ id: "session-1", workspaceId: "workspace-1", title: "【记忆优化】" })],
@@ -96,9 +109,59 @@ describe("WorkspaceClient", () => {
         }),
       ],
     });
+    bridgeMocks.listAutomations.mockResolvedValue({
+      items: [
+        makeGoalAutomationRule(),
+      ],
+    });
+    cloudDeviceMocks.loadDeviceDirectory.mockResolvedValue({
+      userId: "user-1",
+      defaultDeviceId: "cloud-device-1",
+      items: [makeCloudDevice()],
+    });
+    deviceBootstrapMocks.ensureCurrentGitHubDeviceReady.mockResolvedValue({
+      didBind: false,
+      didSetDefault: false,
+      directory: {
+        userId: "user-1",
+        defaultDeviceId: "cloud-device-1",
+        items: [makeCloudDevice()],
+      },
+      localDevice: makeLocalDevice(),
+    });
     bridgeMocks.runSessionStream.mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url === "/api/auth/session") {
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              configured: true,
+              session: {
+                method: "github",
+                provider: "github",
+                userId: "user-1",
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
     HTMLElement.prototype.scrollIntoView = vi.fn();
     HTMLDivElement.prototype.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("renders timeline memories in summary and hides linked files and timeline sections", async () => {
@@ -186,6 +249,53 @@ describe("WorkspaceClient", () => {
     const input = screen.getByPlaceholderText("继续在当前工作区中执行任务...") as HTMLTextAreaElement;
     expect(input.value).toContain("请基于当前上下文帮我设计一个 Codex 自动化。");
     expect(input.value).toContain("1. 这个自动化应该做什么");
+  });
+
+  it("shows linked goal automation status directly in the workspace view", async () => {
+    render(<WorkspaceClient language="zh" />);
+
+    await waitFor(() => {
+      expect(bridgeMocks.listAutomations).toHaveBeenCalledTimes(1);
+    });
+
+    expect(screen.getByText("自动化状态")).toBeTruthy();
+    expect(screen.getByText("自动推进当前会话")).toBeTruthy();
+    expect(screen.getByText("已完成")).toBeTruthy();
+    expect(screen.getByText("进度")).toBeTruthy();
+    expect(screen.getByText("已在 1/10 轮内完成。")).toBeTruthy();
+    expect(screen.getByText("结论")).toBeTruthy();
+    expect(screen.getByText("项目介绍、架构和当前状态都已覆盖，满足这次自动化实验的目标。")).toBeTruthy();
+  });
+
+  it("shows the current relay device and default device in the workspace header", async () => {
+    render(<WorkspaceClient language="zh" />);
+
+    await waitFor(() => {
+      expect(deviceBootstrapMocks.ensureCurrentGitHubDeviceReady).toHaveBeenCalledTimes(1);
+    });
+
+    expect(screen.getByText("当前直连")).toBeTruthy();
+    expect(screen.getAllByText("Relay Mac").length).toBeGreaterThan(0);
+    expect(screen.getByText("默认设备")).toBeTruthy();
+    expect(screen.getByText("当前已连接默认设备")).toBeTruthy();
+  });
+
+  it("shows linked goal automation progress and conclusion for the current session", async () => {
+    render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(bridgeMocks.listAutomations).toHaveBeenCalledTimes(1);
+    });
+    await openWorkspaceSidepanel(user);
+
+    await user.click(screen.getByRole("tab", { name: "自动化" }));
+
+    expect(screen.getByText("当前会话状态")).toBeTruthy();
+    expect(screen.getAllByText("自动推进当前会话").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已完成").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已在 1/10 轮内完成。").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("项目介绍、架构和当前状态都已覆盖，满足这次自动化实验的目标。").length).toBeGreaterThan(0);
   });
 
   it("subscribes to realtime events and refreshes session detail when thread updates", async () => {
@@ -485,6 +595,35 @@ describe("WorkspaceClient", () => {
       [],
       expect.any(Function),
     );
+  });
+
+  it("sends on Enter without inserting a newline, while Shift+Enter keeps multiline input", async () => {
+    render(<WorkspaceClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("继续在当前工作区中执行任务...")).toBeTruthy();
+    });
+
+    const input = screen.getByPlaceholderText("继续在当前工作区中执行任务...") as HTMLTextAreaElement;
+
+    await user.type(input, "第一行");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(input.value).toBe("第一行\n");
+
+    await user.type(input, "第二行");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(bridgeMocks.runSessionStream).toHaveBeenCalledWith(
+        "session-1",
+        "第一行\n第二行",
+        [],
+        expect.any(Function),
+      );
+    });
+
+    expect(input.value).toBe("");
   });
 
   it("uploads pasted clipboard screenshots from the composer", async () => {
@@ -793,6 +932,88 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     createdAt: "2026-04-03T00:00:00.000Z",
     updatedAt: "2026-04-03T00:00:00.000Z",
     ...overrides,
+  };
+}
+
+function makeGoalAutomationRule(
+  overrides: Partial<Extract<AutomationRule, { kind: "goal-loop" }>> = {},
+): Extract<AutomationRule, { kind: "goal-loop" }> {
+  return {
+    id: "goal-automation-1",
+    kind: "goal-loop",
+    source: "relay",
+    title: "自动推进当前会话",
+    summary: "继续推进当前目标",
+    status: "active",
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    sessionTitle: "【记忆优化】",
+    createdAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+    lastRunAt: "2026-04-03T00:05:00.000Z",
+    capabilities: {
+      canEdit: true,
+      canDelete: true,
+      canRun: true,
+      canStop: false,
+    },
+    actionType: "continue-session",
+    goal: "介绍当前项目并说明架构",
+    acceptanceCriteria: "项目介绍、架构和当前状态都已覆盖",
+    trigger: {
+      kind: "manual",
+      turnInterval: null,
+    },
+    targetSessionMode: "existing-session",
+    maxTurns: 10,
+    maxDurationMinutes: 120,
+    runStatus: "completed",
+    currentTurnCount: 1,
+    stopReason: "completed",
+    lastEvaluationReason: "项目介绍、架构和当前状态都已覆盖，满足这次自动化实验的目标。",
+    lastAssistantSummary: "已经给出项目介绍和结构说明。",
+    lastError: null,
+    latestRunId: "goal-run-1",
+    ...overrides,
+  };
+}
+
+function makeLocalDevice(overrides: Partial<{
+  id: string;
+  name: string;
+}> = {}) {
+  return {
+    id: overrides.id ?? "local-device-1",
+    name: overrides.name ?? "Relay Mac",
+    hostname: "relay.local",
+    platform: "darwin",
+    arch: "arm64",
+    status: "online" as const,
+    bindingStatus: "bound" as const,
+    boundUserId: "user-1",
+    createdAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+    lastSeenAt: "2026-04-03T00:00:00.000Z",
+  };
+}
+
+function makeCloudDevice(overrides: Partial<{
+  id: string;
+  localDeviceId: string;
+  name: string;
+}> = {}) {
+  return {
+    id: overrides.id ?? "cloud-device-1",
+    userId: "user-1",
+    localDeviceId: overrides.localDeviceId ?? "local-device-1",
+    name: overrides.name ?? "Relay Mac",
+    hostname: "relay.local",
+    platform: "darwin",
+    arch: "arm64",
+    status: "online" as const,
+    lastSeenAt: "2026-04-03T00:00:00.000Z",
+    createdAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: "2026-04-03T00:00:00.000Z",
   };
 }
 

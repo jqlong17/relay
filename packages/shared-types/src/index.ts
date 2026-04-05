@@ -1,5 +1,6 @@
 export type {
   AutomationCapabilities,
+  GoalAutomationActionType,
   AutomationKind,
   AutomationRule,
   AutomationSource,
@@ -12,9 +13,11 @@ export type {
   GoalAutomationRunStatus,
   GoalAutomationRunStep,
   GoalAutomationStopReason,
+  GoalAutomationTrigger,
+  GoalAutomationTriggerKind,
   GoalAutomationTargetSessionMode,
-  TimelineMemoryCheckpointAutomationRule,
 } from "./automation";
+export type { DeviceBindingStatus, DeviceConnectionStatus, RelayCloudDevice, RelayDevice, RelayDeviceDirectory } from "./device";
 export type { FileTreeKind, FileTreeNode } from "./file-tree";
 export type { CreateTimelineMemoryInput, TimelineMemory, TimelineMemoryStatus } from "./memory";
 export type { Message, MessageRole, MessageStatus } from "./message";

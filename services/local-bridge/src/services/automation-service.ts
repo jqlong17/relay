@@ -8,7 +8,6 @@ import type {
   GoalAutomationRunRecord,
   GoalAutomationRunState,
   Session,
-  TimelineMemoryCheckpointAutomationRule,
 } from "@relay/shared-types";
 
 import { MemoryStore } from "@relay/memory-core";
@@ -20,8 +19,6 @@ import { SessionStore } from "./session-store";
 import { TimelineMemoryService } from "./timeline-memory-service";
 import { WorkspaceStore } from "./workspace-store";
 
-const TIMELINE_MEMORY_AUTOMATION_ID = "timeline-memory-turn-checkpoint";
-const TIMELINE_MEMORY_INTERVAL_TURNS = 20;
 const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_MAX_DURATION_MINUTES = 120;
 
@@ -40,20 +37,23 @@ class AutomationService {
   private readonly memoryStore: MemoryStore;
   private readonly relayStateStore: RelayStateStore;
   private readonly sessionStore: SessionStore;
+  private readonly timelineMemoryService?: TimelineMemoryService;
   private readonly goalAutomationExecutor: GoalAutomationExecutor;
+  private readonly runningActionRuleIds = new Set<string>();
 
   constructor(dependencies: AutomationServiceDependencies) {
     this.workspaceStore = dependencies.workspaceStore;
     this.memoryStore = dependencies.memoryStore;
     this.relayStateStore = dependencies.relayStateStore;
     this.sessionStore = dependencies.sessionStore;
+    this.timelineMemoryService = dependencies.timelineMemoryService;
     this.goalAutomationExecutor = new GoalAutomationExecutor({
       relayStateStore: dependencies.relayStateStore,
       workspaceStore: dependencies.workspaceStore,
       sessionStore: dependencies.sessionStore,
       codexAppServerService: dependencies.codexAppServerService,
       runtimeEventBus: dependencies.runtimeEventBus,
-      timelineMemoryService: dependencies.timelineMemoryService,
+      onSessionUpdated: (sessionId) => this.handleSessionUpdated(sessionId),
     });
   }
 
@@ -64,34 +64,41 @@ class AutomationService {
       return [];
     }
 
-    const systemRule = this.buildTimelineCheckpointRule(workspace.id);
-    const goalRules = this.relayStateStore
+    return this.relayStateStore
       .listInternalAutomationRules(workspace.id)
       .map((rule) => this.mapGoalRule(rule))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-
-    return [systemRule, ...goalRules];
   }
 
   createGoalRule(input: GoalAutomationRuleInput) {
     const workspace = this.resolveWorkspace(input.workspaceId);
     const now = new Date().toISOString();
+    const actionType = normalizeActionType(input.actionType);
+    const triggerKind = normalizeTriggerKind(input.triggerKind);
+    const targetSessionMode = normalizeTargetSessionMode(actionType, triggerKind, input.targetSessionMode);
+    const goal = normalizeGoal(actionType, input.goal);
+    const title = normalizeTitle(input.title, actionType, goal);
     const rule: GoalAutomationRuleDefinition = {
       id: randomUUID(),
       kind: "goal-loop",
-      title: normalizeTitle(input.title, input.goal),
-      goal: normalizeGoal(input.goal),
+      actionType,
+      trigger: {
+        kind: triggerKind,
+        turnInterval: normalizeTriggerTurnInterval(triggerKind, input.triggerTurnInterval),
+      },
+      title,
+      goal,
+      acceptanceCriteria: normalizeAcceptanceCriteria(actionType, input.acceptanceCriteria),
       status: normalizeStatus(input.status),
       workspaceId: workspace.id,
-      targetSessionMode: input.targetSessionMode,
-      targetSessionId: normalizeTargetSessionId(input.targetSessionMode, input.targetSessionId),
+      targetSessionMode,
+      targetSessionId: normalizeTargetSessionId(targetSessionMode, input.targetSessionId),
       targetSessionTitle: this.resolveTargetSessionTitle(
         workspace.id,
-        input.targetSessionMode,
+        targetSessionMode,
         input.targetSessionId ?? null,
         input.targetSessionTitle ?? null,
-        input.title,
-        input.goal,
+        title,
       ),
       maxTurns: clampNumber(input.maxTurns, 1, 50, DEFAULT_MAX_TURNS),
       maxDurationMinutes: clampNumber(input.maxDurationMinutes, 5, 720, DEFAULT_MAX_DURATION_MINUTES),
@@ -106,27 +113,41 @@ class AutomationService {
   }
 
   updateGoalRule(ruleId: string, input: GoalAutomationRuleInput) {
-    if (this.goalAutomationExecutor.isRunning(ruleId)) {
+    if (this.isRuleRunning(ruleId)) {
       throw new Error("Stop the automation before editing it");
     }
 
     const current = this.requireGoalRule(ruleId);
     const workspace = this.resolveWorkspace(input.workspaceId ?? current.workspaceId);
+    const actionType = normalizeActionType(input.actionType ?? current.actionType);
+    const triggerKind = normalizeTriggerKind(input.triggerKind ?? current.trigger.kind);
+    const targetSessionMode = normalizeTargetSessionMode(
+      actionType,
+      triggerKind,
+      input.targetSessionMode ?? current.targetSessionMode,
+    );
+    const goal = normalizeGoal(actionType, input.goal ?? current.goal);
+    const title = normalizeTitle(input.title ?? current.title, actionType, goal);
     const updated: GoalAutomationRuleDefinition = {
       ...current,
-      title: normalizeTitle(input.title, input.goal),
-      goal: normalizeGoal(input.goal),
+      actionType,
+      trigger: {
+        kind: triggerKind,
+        turnInterval: normalizeTriggerTurnInterval(triggerKind, input.triggerTurnInterval ?? current.trigger.turnInterval),
+      },
+      title,
+      goal,
+      acceptanceCriteria: normalizeAcceptanceCriteria(actionType, input.acceptanceCriteria ?? current.acceptanceCriteria),
       status: normalizeStatus(input.status ?? current.status),
       workspaceId: workspace.id,
-      targetSessionMode: input.targetSessionMode,
-      targetSessionId: normalizeTargetSessionId(input.targetSessionMode, input.targetSessionId),
+      targetSessionMode,
+      targetSessionId: normalizeTargetSessionId(targetSessionMode, input.targetSessionId ?? current.targetSessionId),
       targetSessionTitle: this.resolveTargetSessionTitle(
         workspace.id,
-        input.targetSessionMode,
-        input.targetSessionId ?? null,
+        targetSessionMode,
+        input.targetSessionId ?? current.targetSessionId,
         input.targetSessionTitle ?? current.targetSessionTitle,
-        input.title,
-        input.goal,
+        title,
       ),
       maxTurns: clampNumber(input.maxTurns, 1, 50, current.maxTurns),
       maxDurationMinutes: clampNumber(input.maxDurationMinutes, 5, 720, current.maxDurationMinutes),
@@ -138,11 +159,7 @@ class AutomationService {
   }
 
   deleteRule(ruleId: string) {
-    if (ruleId === TIMELINE_MEMORY_AUTOMATION_ID) {
-      throw new Error("System automation cannot be deleted");
-    }
-
-    if (this.goalAutomationExecutor.isRunning(ruleId)) {
+    if (this.isRuleRunning(ruleId)) {
       throw new Error("Stop the automation before deleting it");
     }
 
@@ -155,19 +172,23 @@ class AutomationService {
     return true;
   }
 
-  startRule(ruleId: string) {
-    if (ruleId === TIMELINE_MEMORY_AUTOMATION_ID) {
-      throw new Error("System automation cannot be started manually");
+  async startRule(ruleId: string) {
+    const rule = this.requireGoalRule(ruleId);
+
+    if (rule.actionType === "continue-session") {
+      this.goalAutomationExecutor.start(rule);
+      return this.mapGoalRule(rule);
     }
 
-    const rule = this.requireGoalRule(ruleId);
-    this.goalAutomationExecutor.start(rule);
-    return this.mapGoalRule(rule);
+    await this.executeGenerateTimelineMemoryRule(rule, "manual");
+    return this.mapGoalRule(this.requireGoalRule(ruleId));
   }
 
   stopRule(ruleId: string) {
-    if (ruleId === TIMELINE_MEMORY_AUTOMATION_ID) {
-      throw new Error("System automation cannot be stopped manually");
+    const rule = this.requireGoalRule(ruleId);
+
+    if (rule.actionType !== "continue-session") {
+      throw new Error("This automation does not support stop");
     }
 
     const stopped = this.goalAutomationExecutor.stop(ruleId);
@@ -195,78 +216,151 @@ class AutomationService {
     return (runState?.recentRuns ?? []).slice(0, Math.max(1, limit));
   }
 
-  private buildTimelineCheckpointRule(workspaceId: string): TimelineMemoryCheckpointAutomationRule {
-    const session = this.getReferenceSession(workspaceId);
-    const workspaceMemories = this.memoryStore.listByWorkspaceId(workspaceId);
-    const latestCheckpointMemory = workspaceMemories.find(
-      (item) => item.checkpointTurnCount > 0 && item.checkpointTurnCount % TIMELINE_MEMORY_INTERVAL_TURNS === 0,
-    );
+  async handleSessionUpdated(sessionId: string) {
+    const session = this.workspaceStore.getSessionDetailSnapshot(sessionId);
 
-    const currentTurnCount = session?.turnCount ?? null;
-    const currentCheckpoint =
-      currentTurnCount === null ? null : Math.floor(currentTurnCount / TIMELINE_MEMORY_INTERVAL_TURNS) * TIMELINE_MEMORY_INTERVAL_TURNS;
-    const hasCompletedCurrentCheckpoint =
-      session && currentCheckpoint
-        ? workspaceMemories.some(
-            (item) => item.sessionId === session.id && item.checkpointTurnCount === currentCheckpoint,
-          )
-        : false;
-    const nextCheckpointTurnCount =
-      currentTurnCount === null
-        ? null
-        : currentTurnCount === 0
-          ? TIMELINE_MEMORY_INTERVAL_TURNS
-          : currentTurnCount % TIMELINE_MEMORY_INTERVAL_TURNS === 0
-            ? hasCompletedCurrentCheckpoint
-              ? currentTurnCount + TIMELINE_MEMORY_INTERVAL_TURNS
-              : currentTurnCount
-            : currentTurnCount + (TIMELINE_MEMORY_INTERVAL_TURNS - (currentTurnCount % TIMELINE_MEMORY_INTERVAL_TURNS));
-    const turnsUntilNextRun =
-      currentTurnCount === null || nextCheckpointTurnCount === null ? null : nextCheckpointTurnCount - currentTurnCount;
+    if (!session) {
+      return;
+    }
 
-    return {
-      id: TIMELINE_MEMORY_AUTOMATION_ID,
-      kind: "timeline-memory-checkpoint",
-      source: "relay",
-      title: "按轮次自动整理",
-      summary: "每 20 轮对话自动生成 timeline memory。",
-      status: "active",
-      workspaceId,
-      sessionId: session?.id ?? null,
-      sessionTitle: session?.title ?? null,
-      intervalTurns: TIMELINE_MEMORY_INTERVAL_TURNS,
-      currentTurnCount,
-      turnsUntilNextRun,
-      nextCheckpointTurnCount,
-      lastRunAt: latestCheckpointMemory?.createdAt ?? null,
-      createdAt: latestCheckpointMemory?.createdAt ?? new Date().toISOString(),
-      updatedAt: latestCheckpointMemory?.updatedAt ?? new Date().toISOString(),
-      capabilities: {
-        canEdit: false,
-        canDelete: false,
-        canRun: false,
-        canStop: false,
-      },
-    };
+    const rules = this.relayStateStore
+      .listInternalAutomationRules(session.workspaceId)
+      .filter((rule) => shouldTriggerOnSessionTurn(rule, session, this.getGoalRunState(rule.id)));
+
+    for (const rule of rules) {
+      if (this.isRuleRunning(rule.id)) {
+        continue;
+      }
+
+      if (rule.actionType === "continue-session") {
+        this.markRuleTriggered(rule.id, session);
+        this.goalAutomationExecutor.start(rule);
+        continue;
+      }
+
+      await this.executeGenerateTimelineMemoryRule(rule, "turn-interval", session);
+    }
+  }
+
+  private async executeGenerateTimelineMemoryRule(
+    rule: GoalAutomationRuleDefinition,
+    source: "manual" | "turn-interval",
+    resolvedSession?: Session,
+  ) {
+    if (!this.timelineMemoryService) {
+      throw new Error("Timeline memory service is unavailable");
+    }
+
+    if (this.runningActionRuleIds.has(rule.id)) {
+      return;
+    }
+
+    this.runningActionRuleIds.add(rule.id);
+
+    try {
+      const session = resolvedSession ?? this.resolveSession(rule.workspaceId, rule.targetSessionId);
+
+      if (!session) {
+        throw new Error("Target session not found");
+      }
+
+      if (session.turnCount <= 0) {
+        throw new Error("Target session has no turns yet");
+      }
+
+      const checkpointTurnCount = session.turnCount;
+      const existing = this.memoryStore.getByCheckpoint(session.id, checkpointTurnCount);
+      const item = await this.timelineMemoryService.generateForSession(session.id, { manual: true });
+      const finishedAt = new Date().toISOString();
+      const summary =
+        existing
+          ? `Turn ${checkpointTurnCount} already has a timeline memory checkpoint.`
+          : item
+            ? `Generated timeline memory at turn ${checkpointTurnCount}.`
+            : `Failed to generate timeline memory at turn ${checkpointTurnCount}.`;
+      const status = item || existing ? "completed" : "failed";
+      const stopReason = item || existing ? "completed" : "failed";
+      const step = createSimpleActionStep({
+        prompt:
+          source === "manual"
+            ? `Manually run the "${rule.title}" rule.`
+            : `Session reached turn ${checkpointTurnCount}; run the "${rule.title}" rule.`,
+        reason: summary,
+        createdAt: finishedAt,
+      });
+      const currentState = this.getGoalRunState(rule.id);
+      const runRecord: GoalAutomationRunRecord = {
+        id: randomUUID(),
+        ruleId: rule.id,
+        status,
+        stopReason,
+        startedAt: finishedAt,
+        updatedAt: finishedAt,
+        finishedAt,
+        summary,
+        output: step.prompt,
+        turnsCompleted: 1,
+        sessionId: session.id,
+        sessionTitle: session.title,
+        lastEvaluationReason: summary,
+        lastAssistantSummary: item ? item.title : null,
+        lastError: item || existing ? null : summary,
+        steps: [step],
+      };
+
+      this.relayStateStore.saveInternalAutomationRunState({
+        ...currentState,
+        runStatus: status,
+        updatedAt: finishedAt,
+        finishedAt,
+        currentTurnCount: 0,
+        stopReason,
+        lastEvaluationReason: summary,
+        lastAssistantSummary: item ? item.title : null,
+        lastError: item || existing ? null : summary,
+        latestRunId: runRecord.id,
+        latestUserPrompt: null,
+        lastTriggeredTurnCount: checkpointTurnCount,
+        sessionId: session.id,
+        sessionTitle: session.title,
+        recentRuns: [runRecord, ...currentState.recentRuns.filter((existingRun) => existingRun.id !== runRecord.id)].slice(0, 10),
+      });
+    } finally {
+      this.runningActionRuleIds.delete(rule.id);
+    }
+  }
+
+  private markRuleTriggered(ruleId: string, session: Session) {
+    const currentState = this.getGoalRunState(ruleId);
+    this.relayStateStore.saveInternalAutomationRunState({
+      ...currentState,
+      updatedAt: new Date().toISOString(),
+      lastTriggeredTurnCount: session.turnCount,
+      sessionId: session.id,
+      sessionTitle: session.title,
+    });
   }
 
   private mapGoalRule(rule: GoalAutomationRuleDefinition): GoalAutomationRule {
     const runState = this.getGoalRunState(rule.id);
-    const isRunning = this.goalAutomationExecutor.isRunning(rule.id);
+    const isRunning = this.isRuleRunning(rule.id);
     const latestRun = runState.recentRuns[0] ?? null;
+    const isLongRunningAction = rule.actionType === "continue-session";
 
     return {
       id: rule.id,
       kind: "goal-loop",
       source: "relay",
       title: rule.title,
-      summary: rule.goal,
+      summary: createRuleSummary(rule),
       status: rule.status,
       workspaceId: rule.workspaceId,
       sessionId: runState.sessionId ?? rule.targetSessionId,
       sessionTitle: runState.sessionTitle ?? rule.targetSessionTitle,
+      actionType: rule.actionType,
+      trigger: rule.trigger,
       goal: rule.goal,
-      trigger: "manual",
+      acceptanceCriteria: rule.acceptanceCriteria,
       targetSessionMode: rule.targetSessionMode,
       maxTurns: rule.maxTurns,
       maxDurationMinutes: rule.maxDurationMinutes,
@@ -284,7 +378,7 @@ class AutomationService {
         canEdit: !isRunning,
         canDelete: !isRunning,
         canRun: !isRunning,
-        canStop: isRunning,
+        canStop: isLongRunningAction && this.goalAutomationExecutor.isRunning(rule.id),
       },
     };
   }
@@ -292,7 +386,11 @@ class AutomationService {
   private getGoalRunState(ruleId: string): GoalAutomationRunState {
     const current = this.relayStateStore.getInternalAutomationRunState(ruleId) ?? createIdleGoalRunState(ruleId);
 
-    if (current.runStatus === "running" && !this.goalAutomationExecutor.isRunning(ruleId)) {
+    if (
+      current.runStatus === "running" &&
+      !this.goalAutomationExecutor.isRunning(ruleId) &&
+      !this.runningActionRuleIds.has(ruleId)
+    ) {
       const normalized: GoalAutomationRunState = {
         ...current,
         runStatus: "failed",
@@ -308,6 +406,10 @@ class AutomationService {
     }
 
     return current;
+  }
+
+  private isRuleRunning(ruleId: string) {
+    return this.goalAutomationExecutor.isRunning(ruleId) || this.runningActionRuleIds.has(ruleId);
   }
 
   private requireGoalRule(ruleId: string) {
@@ -338,14 +440,13 @@ class AutomationService {
 
   private resolveTargetSessionTitle(
     workspaceId: string,
-    mode: GoalAutomationRuleInput["targetSessionMode"],
+    mode: GoalAutomationRuleDefinition["targetSessionMode"],
     sessionId: string | null,
     fallbackTitle: string | null | undefined,
     title: string,
-    goal: string,
   ) {
     if (mode === "new-session") {
-      const nextTitle = fallbackTitle?.trim() || normalizeTitle(title, goal);
+      const nextTitle = fallbackTitle?.trim() || title;
       return nextTitle || "Goal Session";
     }
 
@@ -368,36 +469,80 @@ class AutomationService {
       return snapshotSession;
     }
 
-    const listSnapshotSession = this.getSessionFromSnapshots(workspaceId, sessionId);
-    if (listSnapshotSession) {
-      return listSnapshotSession;
-    }
-
-    return null;
-  }
-
-  private getSessionFromSnapshots(workspaceId: string, sessionId: string) {
     const snapshotList = this.workspaceStore.getSessionListSnapshot(workspaceId);
     return snapshotList?.items.find((item) => item.id === sessionId) ?? null;
   }
-
-  private getReferenceSession(workspaceId: string): Session | null {
-    const preferredSessionId = this.workspaceStore.getPreferredSessionId(workspaceId);
-
-    if (preferredSessionId) {
-      const preferredSession = this.workspaceStore.getSessionDetailSnapshot(preferredSessionId);
-      if (preferredSession) {
-        return preferredSession;
-      }
-    }
-
-    const sessionListSnapshot = this.workspaceStore.getSessionListSnapshot(workspaceId);
-    return sessionListSnapshot?.items[0] ?? null;
-  }
 }
 
-function normalizeTitle(title: string, goal: string) {
-  const value = title.trim() || goal.trim();
+function createRuleSummary(rule: GoalAutomationRuleDefinition) {
+  if (rule.actionType === "generate-timeline-memory") {
+    if (rule.trigger.kind === "turn-interval" && rule.trigger.turnInterval) {
+      return `Generate a timeline memory every ${rule.trigger.turnInterval} turns.`;
+    }
+
+    return "Generate a timeline memory for the bound session.";
+  }
+
+  return rule.goal ?? "Continue the bound session until the goal is complete.";
+}
+
+function createSimpleActionStep(input: {
+  prompt: string;
+  reason: string;
+  createdAt: string;
+}) {
+  return {
+    turnNumber: 1,
+    prompt: input.prompt,
+    assistantReply: null,
+    evaluationDone: true,
+    evaluationReason: input.reason,
+    nextUserPrompt: null,
+    createdAt: input.createdAt,
+    completedAt: input.createdAt,
+  };
+}
+
+function shouldTriggerOnSessionTurn(
+  rule: GoalAutomationRuleDefinition,
+  session: Session,
+  runState: GoalAutomationRunState,
+) {
+  if (rule.status !== "active") {
+    return false;
+  }
+
+  if (rule.trigger.kind !== "turn-interval") {
+    return false;
+  }
+
+  if (rule.targetSessionMode !== "existing-session" || rule.targetSessionId !== session.id) {
+    return false;
+  }
+
+  const interval = rule.trigger.turnInterval ?? 0;
+  if (interval <= 0 || session.turnCount <= 0 || session.turnCount % interval !== 0) {
+    return false;
+  }
+
+  return runState.lastTriggeredTurnCount !== session.turnCount;
+}
+
+function normalizeActionType(value?: string | null): GoalAutomationRuleDefinition["actionType"] {
+  return value === "generate-timeline-memory" ? "generate-timeline-memory" : "continue-session";
+}
+
+function normalizeTriggerKind(value?: string | null): GoalAutomationRuleDefinition["trigger"]["kind"] {
+  return value === "turn-interval" ? "turn-interval" : "manual";
+}
+
+function normalizeTitle(
+  title: string | undefined,
+  actionType: GoalAutomationRuleDefinition["actionType"],
+  goal: string | null,
+) {
+  const fallback = actionType === "generate-timeline-memory" ? "Timeline Memory Rule" : goal ?? "";
+  const value = title?.trim() || fallback.trim();
 
   if (!value) {
     throw new Error("Missing automation title");
@@ -406,9 +551,15 @@ function normalizeTitle(title: string, goal: string) {
   return value.length > 80 ? `${value.slice(0, 80)}…` : value;
 }
 
-function normalizeGoal(goal: string) {
-  const value = goal.trim();
+function normalizeGoal(
+  actionType: GoalAutomationRuleDefinition["actionType"],
+  goal: string | null | undefined,
+) {
+  if (actionType === "generate-timeline-memory") {
+    return null;
+  }
 
+  const value = goal?.trim();
   if (!value) {
     throw new Error("Missing automation goal");
   }
@@ -416,12 +567,36 @@ function normalizeGoal(goal: string) {
   return value;
 }
 
+function normalizeAcceptanceCriteria(
+  actionType: GoalAutomationRuleDefinition["actionType"],
+  value?: string | null,
+) {
+  if (actionType !== "continue-session") {
+    return null;
+  }
+
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 function normalizeStatus(status?: "active" | "paused") {
   return status === "paused" ? "paused" : "active";
 }
 
+function normalizeTargetSessionMode(
+  actionType: GoalAutomationRuleDefinition["actionType"],
+  triggerKind: GoalAutomationRuleDefinition["trigger"]["kind"],
+  mode?: GoalAutomationRuleInput["targetSessionMode"] | null,
+) {
+  if (actionType === "generate-timeline-memory" || triggerKind === "turn-interval") {
+    return "existing-session";
+  }
+
+  return mode === "existing-session" ? "existing-session" : "new-session";
+}
+
 function normalizeTargetSessionId(
-  mode: GoalAutomationRuleInput["targetSessionMode"],
+  mode: GoalAutomationRuleDefinition["targetSessionMode"],
   sessionId?: string | null,
 ) {
   if (mode === "existing-session") {
@@ -435,6 +610,17 @@ function normalizeTargetSessionId(
   return null;
 }
 
+function normalizeTriggerTurnInterval(
+  triggerKind: GoalAutomationRuleDefinition["trigger"]["kind"],
+  value: number | null | undefined,
+) {
+  if (triggerKind !== "turn-interval") {
+    return null;
+  }
+
+  return clampNumber(value ?? 1, 1, 200, 1);
+}
+
 function clampNumber(value: number | undefined, min: number, max: number, fallback: number) {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return fallback;
@@ -443,4 +629,4 @@ function clampNumber(value: number | undefined, min: number, max: number, fallba
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
-export { AutomationService, DEFAULT_MAX_DURATION_MINUTES, DEFAULT_MAX_TURNS, TIMELINE_MEMORY_AUTOMATION_ID, TIMELINE_MEMORY_INTERVAL_TURNS };
+export { AutomationService, DEFAULT_MAX_DURATION_MINUTES, DEFAULT_MAX_TURNS };

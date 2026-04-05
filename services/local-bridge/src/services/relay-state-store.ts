@@ -2,16 +2,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { GoalAutomationRuleDefinition, GoalAutomationRunState, Session, Workspace } from "@relay/shared-types";
+import type {
+  RelayDevice,
+  GoalAutomationRuleDefinition,
+  GoalAutomationRunState,
+  Session,
+  Workspace,
+} from "@relay/shared-types";
 
 type SessionListSnapshot = {
   items: Session[];
   updatedAt: string;
 };
 
+type StoredRelayDevice = Omit<RelayDevice, "lastSeenAt" | "status">;
+
 type RelayBridgeState = {
   internalAutomationRulesByWorkspaceId: Record<string, GoalAutomationRuleDefinition[]>;
   internalAutomationRunStatesByRuleId: Record<string, GoalAutomationRunState>;
+  localDevice: StoredRelayDevice | null;
   preferredSessionIdsByWorkspaceId: Record<string, string>;
   sessionDetailsBySessionId: Record<string, Session>;
   sessionListsByWorkspaceId: Record<string, SessionListSnapshot>;
@@ -21,6 +30,7 @@ type RelayBridgeState = {
 const DEFAULT_STATE: RelayBridgeState = {
   internalAutomationRulesByWorkspaceId: {},
   internalAutomationRunStatesByRuleId: {},
+  localDevice: null,
   preferredSessionIdsByWorkspaceId: {},
   sessionDetailsBySessionId: {},
   sessionListsByWorkspaceId: {},
@@ -38,6 +48,15 @@ class RelayStateStore {
 
   getWorkspaces() {
     return this.state.workspaces;
+  }
+
+  getLocalDevice() {
+    return this.state.localDevice;
+  }
+
+  saveLocalDevice(device: StoredRelayDevice) {
+    this.state.localDevice = device;
+    this.writeState();
   }
 
   listInternalAutomationRules(workspaceId: string) {
@@ -272,10 +291,23 @@ class RelayStateStore {
 
       const raw = fs.readFileSync(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<RelayBridgeState>;
+      const normalizedRules = Object.fromEntries(
+        Object.entries(parsed.internalAutomationRulesByWorkspaceId ?? {}).map(([workspaceId, rules]) => [
+          workspaceId,
+          Array.isArray(rules) ? rules.map(normalizeInternalAutomationRuleDefinition) : [],
+        ]),
+      );
+      const normalizedRunStates = Object.fromEntries(
+        Object.entries(parsed.internalAutomationRunStatesByRuleId ?? {}).map(([ruleId, runState]) => [
+          ruleId,
+          normalizeInternalAutomationRunState(ruleId, runState),
+        ]),
+      );
 
       return {
-        internalAutomationRulesByWorkspaceId: parsed.internalAutomationRulesByWorkspaceId ?? {},
-        internalAutomationRunStatesByRuleId: parsed.internalAutomationRunStatesByRuleId ?? {},
+        internalAutomationRulesByWorkspaceId: normalizedRules,
+        internalAutomationRunStatesByRuleId: normalizedRunStates,
+        localDevice: normalizeStoredRelayDevice(parsed.localDevice),
         preferredSessionIdsByWorkspaceId: parsed.preferredSessionIdsByWorkspaceId ?? {},
         sessionDetailsBySessionId: parsed.sessionDetailsBySessionId ?? {},
         sessionListsByWorkspaceId: parsed.sessionListsByWorkspaceId ?? {},
@@ -302,4 +334,80 @@ function resolveDefaultStateFilePath() {
   return path.join(os.homedir(), ".relay", "local-bridge-state.json");
 }
 
+function normalizeInternalAutomationRuleDefinition(value: unknown): GoalAutomationRuleDefinition {
+  const rule = value as Partial<GoalAutomationRuleDefinition> & {
+    actionType?: string;
+    goal?: string | null;
+    trigger?: { kind?: string; turnInterval?: number | null } | null;
+  };
+  const triggerKind = rule.trigger?.kind === "turn-interval" ? "turn-interval" : "manual";
+  const turnInterval =
+    triggerKind === "turn-interval" && typeof rule.trigger?.turnInterval === "number" && Number.isFinite(rule.trigger.turnInterval)
+      ? Math.max(1, Math.round(rule.trigger.turnInterval))
+      : null;
+
+  return {
+    ...(rule as GoalAutomationRuleDefinition),
+    kind: "goal-loop",
+    actionType: rule.actionType === "generate-timeline-memory" ? "generate-timeline-memory" : "continue-session",
+    trigger: {
+      kind: triggerKind,
+      turnInterval,
+    },
+    goal: typeof rule.goal === "string" ? rule.goal : null,
+    acceptanceCriteria: typeof rule.acceptanceCriteria === "string" ? rule.acceptanceCriteria : null,
+    targetSessionMode: rule.targetSessionMode === "existing-session" ? "existing-session" : "new-session",
+  };
+}
+
+function normalizeInternalAutomationRunState(ruleId: string, value: unknown): GoalAutomationRunState {
+  const runState = value as Partial<GoalAutomationRunState>;
+
+  return {
+    ruleId,
+    runStatus: runState.runStatus ?? "idle",
+    startedAt: runState.startedAt ?? null,
+    updatedAt: runState.updatedAt ?? null,
+    finishedAt: runState.finishedAt ?? null,
+    currentTurnCount: typeof runState.currentTurnCount === "number" ? runState.currentTurnCount : 0,
+    stopReason: runState.stopReason ?? null,
+    lastEvaluationReason: runState.lastEvaluationReason ?? null,
+    lastAssistantSummary: runState.lastAssistantSummary ?? null,
+    lastError: runState.lastError ?? null,
+    latestRunId: runState.latestRunId ?? null,
+    latestUserPrompt: runState.latestUserPrompt ?? null,
+    lastTriggeredTurnCount:
+      typeof runState.lastTriggeredTurnCount === "number" ? runState.lastTriggeredTurnCount : null,
+    sessionId: runState.sessionId ?? null,
+    sessionTitle: runState.sessionTitle ?? null,
+    recentRuns: Array.isArray(runState.recentRuns) ? runState.recentRuns : [],
+  };
+}
+
+function normalizeStoredRelayDevice(value: unknown): StoredRelayDevice | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const device = value as Partial<StoredRelayDevice>;
+  const id = typeof device.id === "string" ? device.id.trim() : "";
+
+  if (id.length === 0) {
+    return null;
+  }
+
+  return {
+    id,
+    name: typeof device.name === "string" && device.name.trim().length > 0 ? device.name.trim() : "Relay Device",
+    hostname: typeof device.hostname === "string" && device.hostname.trim().length > 0 ? device.hostname.trim() : "unknown",
+    platform: typeof device.platform === "string" && device.platform.trim().length > 0 ? device.platform.trim() : "unknown",
+    arch: typeof device.arch === "string" && device.arch.trim().length > 0 ? device.arch.trim() : "unknown",
+    bindingStatus: device.bindingStatus === "bound" ? "bound" : "unbound",
+    boundUserId: typeof device.boundUserId === "string" && device.boundUserId.trim().length > 0 ? device.boundUserId.trim() : null,
+    createdAt: typeof device.createdAt === "string" && device.createdAt.trim().length > 0 ? device.createdAt : new Date(0).toISOString(),
+    updatedAt: typeof device.updatedAt === "string" && device.updatedAt.trim().length > 0 ? device.updatedAt : new Date(0).toISOString(),
+  };
+}
+
 export { RelayStateStore };
+export type { StoredRelayDevice };

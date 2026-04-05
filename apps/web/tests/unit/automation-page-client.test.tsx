@@ -156,6 +156,7 @@ describe("AutomationPageClient", () => {
 
     await user.type(screen.getByRole("textbox", { name: "规则名称" }), "自动推进当前会话");
     await user.type(screen.getByRole("textbox", { name: "目标描述" }), "继续完成当前 session 中的目标");
+    await user.type(screen.getByRole("textbox", { name: "验收标准" }), "补完项目介绍、架构和当前状态判断");
     await user.selectOptions(screen.getByRole("combobox", { name: "目标会话" }), "existing-session");
     await user.click(screen.getByRole("button", { name: "创建" }));
 
@@ -164,8 +165,43 @@ describe("AutomationPageClient", () => {
         expect.objectContaining({
           title: "自动推进当前会话",
           goal: "继续完成当前 session 中的目标",
+          acceptanceCriteria: "补完项目介绍、架构和当前状态判断",
           targetSessionMode: "existing-session",
           targetSessionId: "session-1",
+        }),
+      );
+    });
+  });
+
+  it("creates a turn-triggered timeline-memory rule", async () => {
+    render(<AutomationPageClient language="zh" />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(bridgeMocks.listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(screen.getByRole("button", { name: "新建目标规则" }));
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "动作" })).toBeTruthy();
+    });
+
+    await user.type(screen.getByRole("textbox", { name: "规则名称" }), "按轮次自动整理");
+    await user.selectOptions(screen.getByRole("combobox", { name: "动作" }), "generate-timeline-memory");
+    await user.selectOptions(screen.getByRole("combobox", { name: "触发条件" }), "turn-interval");
+    await user.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(bridgeMocks.createGoalAutomationRule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "按轮次自动整理",
+          actionType: "generate-timeline-memory",
+          triggerKind: "turn-interval",
+          triggerTurnInterval: 20,
+          targetSessionMode: "existing-session",
+          targetSessionId: "session-1",
+          goal: null,
+          acceptanceCriteria: null,
         }),
       );
     });
@@ -210,6 +246,7 @@ describe("AutomationPageClient", () => {
       expect(screen.getByRole("button", { name: "保存修改" })).toBeTruthy();
     });
 
+    await user.click(screen.getAllByText("Codex News")[0]!);
     await user.clear(screen.getByRole("textbox", { name: "规则名称" }));
     await user.type(screen.getByRole("textbox", { name: "规则名称" }), "Codex News Daily Updated");
     await user.click(screen.getByRole("button", { name: "保存修改" }));
@@ -242,11 +279,11 @@ function makeAutomation(overrides: Partial<CodexAutomation> = {}): CodexAutomati
 }
 
 function makeInternalAutomation(
-  overrides: Partial<Extract<AutomationRule, { kind: "timeline-memory-checkpoint" }>> = {},
-): Extract<AutomationRule, { kind: "timeline-memory-checkpoint" }> {
+  overrides: Partial<Extract<AutomationRule, { kind: "goal-loop" }>> = {},
+): Extract<AutomationRule, { kind: "goal-loop" }> {
   return {
-    id: "timeline-memory-turn-checkpoint",
-    kind: "timeline-memory-checkpoint",
+    id: "timeline-memory-rule-1",
+    kind: "goal-loop",
     source: "relay",
     title: "按轮次自动整理",
     summary: "每 20 轮对话自动生成 timeline memory。",
@@ -256,17 +293,30 @@ function makeInternalAutomation(
     sessionTitle: "current session",
     createdAt: "2026-04-04T04:40:00.000Z",
     updatedAt: "2026-04-04T04:40:00.000Z",
-    intervalTurns: 20,
-    currentTurnCount: 12,
-    turnsUntilNextRun: 8,
-    nextCheckpointTurnCount: 20,
     lastRunAt: "2026-04-04T04:40:00.000Z",
     capabilities: {
-      canEdit: false,
-      canDelete: false,
-      canRun: false,
+      canEdit: true,
+      canDelete: true,
+      canRun: true,
       canStop: false,
     },
+    actionType: "generate-timeline-memory",
+    trigger: {
+      kind: "turn-interval",
+      turnInterval: 20,
+    },
+    goal: null,
+    acceptanceCriteria: null,
+    targetSessionMode: "existing-session",
+    maxTurns: 10,
+    maxDurationMinutes: 120,
+    runStatus: "completed",
+    currentTurnCount: 0,
+    stopReason: "completed",
+    lastEvaluationReason: "Generated timeline memory at turn 20.",
+    lastAssistantSummary: "当前会话 · 20轮时间线记忆",
+    lastError: null,
+    latestRunId: "timeline-memory-run-1",
     ...overrides,
   };
 }
@@ -293,8 +343,13 @@ function makeGoalAutomation(
       canRun: true,
       canStop: false,
     },
+    actionType: "continue-session",
     goal: "继续推进当前 session 中的目标",
-    trigger: "manual",
+    acceptanceCriteria: "产出明确介绍并解释下一步",
+    trigger: {
+      kind: "manual",
+      turnInterval: null,
+    },
     targetSessionMode: "existing-session",
     maxTurns: 10,
     maxDurationMinutes: 120,

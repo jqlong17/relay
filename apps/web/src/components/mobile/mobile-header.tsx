@@ -1,15 +1,12 @@
+import type { ReactNode } from "react";
+
 type MobileHeaderProps = {
   brand: string;
   sessionName: string;
   workspaceName: string;
   statusDetail: string;
   statusLabel: string;
-  sessionsLabel: string;
-  workspacesLabel: string;
-  isSessionsOpen: boolean;
-  isWorkspacesOpen: boolean;
-  onOpenSessions: () => void;
-  onOpenWorkspaces: () => void;
+  actions?: ReactNode;
 };
 
 export function MobileHeader({
@@ -18,13 +15,10 @@ export function MobileHeader({
   workspaceName,
   statusDetail,
   statusLabel,
-  sessionsLabel,
-  workspacesLabel,
-  isSessionsOpen,
-  isWorkspacesOpen,
-  onOpenSessions,
-  onOpenWorkspaces,
+  actions,
 }: MobileHeaderProps) {
+  const hasStatusDetail = statusDetail.trim().length > 0;
+
   return (
     <header className="mobile-header">
       <div className="mobile-header-top">
@@ -32,24 +26,7 @@ export function MobileHeader({
           <span className="mobile-brand-mark">{brand}</span>
           <span className="mobile-status-pill">{statusLabel}</span>
         </div>
-        <div className="mobile-header-actions">
-          <button
-            aria-expanded={isWorkspacesOpen}
-            className={`mobile-header-button ${isWorkspacesOpen ? "mobile-header-button-active" : ""}`}
-            onClick={onOpenWorkspaces}
-            type="button"
-          >
-            {workspacesLabel}
-          </button>
-          <button
-            aria-expanded={isSessionsOpen}
-            className={`mobile-header-button ${isSessionsOpen ? "mobile-header-button-active" : ""}`}
-            onClick={onOpenSessions}
-            type="button"
-          >
-            {sessionsLabel}
-          </button>
-        </div>
+        {actions ? <div className="mobile-header-actions">{actions}</div> : null}
       </div>
       <div className="mobile-header-meta">
         <span className="mobile-header-workspace">{workspaceName}</span>
@@ -58,7 +35,7 @@ export function MobileHeader({
         </span>
         <span className="mobile-header-session">{sessionName}</span>
       </div>
-      <div className="mobile-header-status-detail">{statusDetail}</div>
+      {hasStatusDetail ? <div className="mobile-header-status-detail">{statusDetail}</div> : null}
     </header>
   );
 }

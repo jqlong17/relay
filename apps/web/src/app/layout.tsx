@@ -4,6 +4,8 @@ import { AppShell } from "@/components/app-shell";
 import { getUiCssVariables, loadUiConfig } from "@/config/ui.config";
 import "./globals.css";
 
+export const dynamic = "force-dynamic";
+
 const sourceSans = Source_Sans_3({
   variable: "--font-ui-source",
   subsets: ["latin"],
@@ -62,7 +64,8 @@ export default function RootLayout({
       data-theme={uiConfig.theme}
       lang={uiConfig.language === "zh" ? "zh-CN" : "en"}
       className={`${sourceSans.variable} ${plexSans.variable} ${jetbrainsMono.variable} ${plexMono.variable} ${notoSansSc.variable} ${uiFontClassName} ${monoFontClassName}`}
-      style={{ colorScheme: uiConfig.theme }}
+      suppressHydrationWarning
+      style={{ colorScheme: uiConfig.theme === "dark" ? "dark" : "light" }}
     >
       <body style={uiCssVariables}>
         <AppShell language={uiConfig.language}>{children}</AppShell>

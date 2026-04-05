@@ -11,9 +11,9 @@ import {
   type AppServerNotification,
   type AppServerUserInput,
 } from "../services/codex-app-server";
+import { AutomationService } from "../services/automation-service";
 import { RuntimeEventBus, type RuntimeBridgeEvent } from "../services/runtime-event-bus";
 import { SessionStore } from "../services/session-store";
-import { TimelineMemoryService } from "../services/timeline-memory-service";
 import { WorkspaceStore } from "../services/workspace-store";
 
 async function handleRuntimeRoute(
@@ -22,7 +22,7 @@ async function handleRuntimeRoute(
   workspaceStore: WorkspaceStore,
   sessionStore: SessionStore,
   codexAppServerService: CodexAppServerService,
-  timelineMemoryService: TimelineMemoryService,
+  automationService: AutomationService,
   runtimeEventBus: RuntimeEventBus,
 ) {
   const runtimeUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -130,7 +130,7 @@ async function handleRuntimeRoute(
       await writeRuntimeEventStream(response, stream, runtimeEventBus);
       const snapshotSync = await syncSessionSnapshot(codexAppServerService, workspaceStore, sessionId);
       publishThreadSyncEvents(runtimeEventBus, sessionId, snapshotSync.workspaceId, snapshotSync.ok);
-      void timelineMemoryService.maybeGenerateForSession(sessionId);
+      void automationService.handleSessionUpdated(sessionId);
       response.end();
       return true;
     }
@@ -138,7 +138,7 @@ async function handleRuntimeRoute(
     const events = await collectRuntimeEvents(stream, runtimeEventBus);
     const snapshotSync = await syncSessionSnapshot(codexAppServerService, workspaceStore, sessionId);
     publishThreadSyncEvents(runtimeEventBus, sessionId, snapshotSync.workspaceId, snapshotSync.ok);
-    void timelineMemoryService.maybeGenerateForSession(sessionId);
+    void automationService.handleSessionUpdated(sessionId);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ sessionId, events }));
     return true;
@@ -356,6 +356,7 @@ function mapThreadToSessionDetail(
               ? "assistant"
               : "system",
         content,
+        meta: deriveThreadItemMeta(item),
         status: turn.status === "failed" ? "error" : "completed",
         sequence,
         createdAt: timestamp,
@@ -463,16 +464,60 @@ function formatThreadItemContent(
   }
 
   if (item.type === "plan") {
-    return `**Plan**\n${item.text}`;
+    return item.text;
   }
 
   if (item.type === "reasoning") {
     const reasoningText = item.summary?.join("") || item.content?.join("") || "";
-    return `**Thinking**\n${reasoningText}`;
+    return reasoningText;
   }
 
   const output = item.aggregatedOutput?.trim() ? `\n${item.aggregatedOutput}` : "";
-  return `**Command**\n$ ${item.command}${output}`;
+  return `$ ${item.command}${output}`;
+}
+
+function deriveThreadItemMeta(
+  item:
+    | { type: "userMessage"; id: string; content: AppServerUserInput[] }
+    | { type: "agentMessage"; id: string; text: string }
+    | { type: "plan"; id: string; text: string }
+    | { type: "reasoning"; id: string; summary?: string[]; content?: string[] }
+    | { type: "commandExecution"; id: string; command: string; aggregatedOutput?: string | null },
+) {
+  if (item.type === "plan") {
+    return {
+      kind: "process" as const,
+      process: {
+        itemId: item.id,
+        phase: "plan" as const,
+        label: "Plan",
+      },
+    };
+  }
+
+  if (item.type === "reasoning") {
+    return {
+      kind: "process" as const,
+      process: {
+        itemId: item.id,
+        phase: "thinking" as const,
+        label: "Thinking",
+      },
+    };
+  }
+
+  if (item.type === "commandExecution") {
+    return {
+      kind: "process" as const,
+      process: {
+        itemId: item.id,
+        phase: "command" as const,
+        label: item.command,
+      },
+    };
+  }
+
+  return undefined;
 }
 
 async function resolveSessionWorkspacePath(
@@ -603,11 +648,13 @@ async function* mapAppServerNotificationsToRuntimeEvents(
     if (
       notification.method === "item/reasoning/summaryTextDelta" &&
       notification.params &&
+      typeof notification.params.itemId === "string" &&
       typeof notification.params.delta === "string"
     ) {
       yield {
         type: "process.delta",
         runId: turnId,
+        itemId: notification.params.itemId,
         phase: "thinking",
         delta: notification.params.delta,
         createdAt,
@@ -618,11 +665,13 @@ async function* mapAppServerNotificationsToRuntimeEvents(
     if (
       notification.method === "item/plan/delta" &&
       notification.params &&
+      typeof notification.params.itemId === "string" &&
       typeof notification.params.delta === "string"
     ) {
       yield {
         type: "process.delta",
         runId: turnId,
+        itemId: notification.params.itemId,
         phase: "plan",
         delta: notification.params.delta,
         createdAt,
@@ -633,11 +682,13 @@ async function* mapAppServerNotificationsToRuntimeEvents(
     if (
       notification.method === "item/commandExecution/outputDelta" &&
       notification.params &&
+      typeof notification.params.itemId === "string" &&
       typeof notification.params.delta === "string"
     ) {
       yield {
         type: "process.delta",
         runId: turnId,
+        itemId: notification.params.itemId,
         phase: "command",
         delta: notification.params.delta,
         createdAt,
@@ -656,10 +707,31 @@ async function* mapAppServerNotificationsToRuntimeEvents(
       typeof notification.params.item.command === "string"
     ) {
       yield {
-        type: "process.delta",
+        type: "process.started",
         runId: turnId,
+        itemId: notification.params.item.id,
         phase: "command",
-        delta: `$ ${notification.params.item.command}\n`,
+        label: notification.params.item.command,
+        createdAt,
+      };
+      continue;
+    }
+
+    if (
+      notification.method === "item/completed" &&
+      notification.params &&
+      notification.params.item &&
+      typeof notification.params.item === "object" &&
+      "type" in notification.params.item &&
+      notification.params.item.type === "commandExecution" &&
+      "id" in notification.params.item &&
+      typeof notification.params.item.id === "string"
+    ) {
+      yield {
+        type: "process.completed",
+        runId: turnId,
+        itemId: notification.params.item.id,
+        phase: "command",
         createdAt,
       };
       continue;

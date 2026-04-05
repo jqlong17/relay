@@ -4,8 +4,24 @@ type RuntimeEvent =
   | {
       type: "process.delta";
       runId: string;
+      itemId: string;
       phase: "thinking" | "plan" | "command";
       delta: string;
+      createdAt: string;
+    }
+  | {
+      type: "process.started";
+      runId: string;
+      itemId: string;
+      phase: "thinking" | "plan" | "command";
+      label?: string;
+      createdAt: string;
+    }
+  | {
+      type: "process.completed";
+      runId: string;
+      itemId: string;
+      phase: "thinking" | "plan" | "command";
       createdAt: string;
     }
   | { type: "message.completed"; runId: string; messageId: string; createdAt: string }

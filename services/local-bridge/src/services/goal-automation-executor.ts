@@ -20,7 +20,6 @@ import {
 import { RelayStateStore } from "./relay-state-store";
 import { RuntimeEventBus } from "./runtime-event-bus";
 import { SessionStore } from "./session-store";
-import { TimelineMemoryService } from "./timeline-memory-service";
 import { WorkspaceStore } from "./workspace-store";
 
 type GoalAutomationExecutorDependencies = {
@@ -29,7 +28,7 @@ type GoalAutomationExecutorDependencies = {
   sessionStore: SessionStore;
   codexAppServerService: CodexAppServerService;
   runtimeEventBus?: RuntimeEventBus;
-  timelineMemoryService?: TimelineMemoryService;
+  onSessionUpdated?: (sessionId: string) => void | Promise<void>;
 };
 
 type GoalEvaluationResult = {
@@ -46,7 +45,7 @@ class GoalAutomationExecutor {
   private readonly sessionStore: SessionStore;
   private readonly codexAppServerService: CodexAppServerService;
   private readonly runtimeEventBus?: RuntimeEventBus;
-  private readonly timelineMemoryService?: TimelineMemoryService;
+  private readonly onSessionUpdated?: (sessionId: string) => void | Promise<void>;
 
   constructor(dependencies: GoalAutomationExecutorDependencies) {
     this.relayStateStore = dependencies.relayStateStore;
@@ -54,7 +53,7 @@ class GoalAutomationExecutor {
     this.sessionStore = dependencies.sessionStore;
     this.codexAppServerService = dependencies.codexAppServerService;
     this.runtimeEventBus = dependencies.runtimeEventBus;
-    this.timelineMemoryService = dependencies.timelineMemoryService;
+    this.onSessionUpdated = dependencies.onSessionUpdated;
   }
 
   isRunning(ruleId: string) {
@@ -62,6 +61,10 @@ class GoalAutomationExecutor {
   }
 
   start(rule: GoalAutomationRuleDefinition) {
+    if (rule.actionType !== "continue-session") {
+      throw new Error("Unsupported automation action");
+    }
+
     if (this.runningControllers.has(rule.id)) {
       throw new Error("Automation is already running");
     }
@@ -86,15 +89,20 @@ class GoalAutomationExecutor {
   }
 
   private async run(rule: GoalAutomationRuleDefinition, signal: AbortSignal) {
+    if (!rule.goal) {
+      throw new Error("Missing goal for continue-session automation");
+    }
+
+    const goal = rule.goal;
     const workspace = this.workspaceStore.get(rule.workspaceId);
     const baseRunState = this.relayStateStore.getInternalAutomationRunState(rule.id);
     const now = new Date().toISOString();
     const runId = randomUUID();
     const startedAtMs = Date.now();
     const steps: GoalAutomationRunStep[] = [];
-    let currentPrompt = buildInitialGoalPrompt(rule.goal);
+    let currentPrompt = buildInitialGoalPrompt(goal, rule.acceptanceCriteria);
     let currentSessionId = rule.targetSessionId;
-    let currentSessionTitle = rule.targetSessionTitle ?? deriveGoalSessionTitle(rule.title, rule.goal);
+    let currentSessionTitle = rule.targetSessionTitle ?? deriveGoalSessionTitle(rule.title, goal);
 
     const runningState: GoalAutomationRunState = {
       ruleId: rule.id,
@@ -109,6 +117,7 @@ class GoalAutomationExecutor {
       lastError: null,
       latestRunId: runId,
       latestUserPrompt: currentPrompt,
+      lastTriggeredTurnCount: baseRunState?.lastTriggeredTurnCount ?? null,
       sessionId: currentSessionId,
       sessionTitle: currentSessionTitle,
       recentRuns: baseRunState?.recentRuns ?? [],
@@ -171,7 +180,8 @@ class GoalAutomationExecutor {
 
         const evaluation = await this.evaluateGoal({
           workspacePath: workspace?.localPath ?? turnResult.workspacePath,
-          goal: rule.goal,
+          goal,
+          acceptanceCriteria: rule.acceptanceCriteria,
           maxTurns: rule.maxTurns,
           turnNumber,
           assistantReply: turnResult.assistantReply,
@@ -215,7 +225,9 @@ class GoalAutomationExecutor {
           return;
         }
 
-        currentPrompt = evaluation.nextUserPrompt?.trim() || buildFallbackContinuationPrompt(rule.goal, turnNumber);
+        currentPrompt =
+          evaluation.nextUserPrompt?.trim() ||
+          buildFallbackContinuationPrompt(goal, rule.acceptanceCriteria, turnNumber);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Goal automation run failed";
@@ -300,7 +312,7 @@ class GoalAutomationExecutor {
     persistMaterializedSessionSnapshots(this.workspaceStore, resolvedWorkspaceId, thread);
     this.workspaceStore.setPreferredSessionId(resolvedWorkspaceId, thread.id);
     publishThreadSyncEvents(this.runtimeEventBus, thread.id, resolvedWorkspaceId);
-    void this.timelineMemoryService?.maybeGenerateForSession(thread.id);
+    void this.onSessionUpdated?.(thread.id);
 
     return {
       sessionId: thread.id,
@@ -347,6 +359,7 @@ class GoalAutomationExecutor {
   private async evaluateGoal(input: {
     workspacePath: string;
     goal: string;
+    acceptanceCriteria: string | null;
     maxTurns: number;
     turnNumber: number;
     assistantReply: string | null;
@@ -360,6 +373,7 @@ class GoalAutomationExecutor {
         buildTurnInput(
           createGoalEvaluationPrompt({
             goal: input.goal,
+            acceptanceCriteria: input.acceptanceCriteria,
             maxTurns: input.maxTurns,
             turnNumber: input.turnNumber,
             assistantReply: input.assistantReply,
@@ -384,7 +398,7 @@ class GoalAutomationExecutor {
       return {
         done: false,
         reason: "Evaluator returned invalid JSON. Continue with a concrete next step.",
-        nextUserPrompt: buildFallbackContinuationPrompt(input.goal, input.turnNumber),
+        nextUserPrompt: buildFallbackContinuationPrompt(input.goal, input.acceptanceCriteria, input.turnNumber),
       };
     } finally {
       await this.codexAppServerService.threadArchive(thread.id).catch(() => {});
@@ -406,6 +420,7 @@ function createIdleGoalRunState(ruleId: string): GoalAutomationRunState {
     lastError: null,
     latestRunId: null,
     latestUserPrompt: null,
+    lastTriggeredTurnCount: null,
     sessionId: null,
     sessionTitle: null,
     recentRuns: [],
@@ -513,33 +528,50 @@ function formatRunOutput(steps: GoalAutomationRunStep[]) {
     .join("\n\n---\n\n");
 }
 
-function buildInitialGoalPrompt(goal: string) {
-  return [
+function buildInitialGoalPrompt(goal: string, acceptanceCriteria: string | null) {
+  const sections = [
     "你现在开始围绕一个明确目标持续推进。",
     "",
     "目标：",
     goal.trim(),
     "",
+  ];
+
+  if (acceptanceCriteria?.trim()) {
+    sections.push("验收标准：", acceptanceCriteria.trim(), "");
+  }
+
+  sections.push(
     "要求：",
     "1. 直接开始执行，不要先反问。",
     "2. 如果有不确定处，优先做合理假设并说明。",
     "3. 给出本轮能完成的最大推进。",
     "4. 在结尾明确说明距离目标还差什么。",
-  ].join("\n");
+    "5. 只有在验收标准满足时，才把任务视为完成。",
+  );
+
+  return sections.join("\n");
 }
 
-function buildFallbackContinuationPrompt(goal: string, completedTurns: number) {
-  return [
+function buildFallbackContinuationPrompt(goal: string, acceptanceCriteria: string | null, completedTurns: number) {
+  const sections = [
     `继续推进这个目标：${goal.trim()}`,
     "",
     `你已经完成了 ${completedTurns} 轮自动推进。`,
     "请基于上文直接执行下一步，不要等待人类补充。",
     "如果目标仍未完成，请优先解决当前最关键的阻塞项。",
-  ].join("\n");
+  ];
+
+  if (acceptanceCriteria?.trim()) {
+    sections.push("", "仍需满足的验收标准：", acceptanceCriteria.trim());
+  }
+
+  return sections.join("\n");
 }
 
 function createGoalEvaluationPrompt(input: {
   goal: string;
+  acceptanceCriteria: string | null;
   maxTurns: number;
   turnNumber: number;
   assistantReply: string | null;
@@ -556,6 +588,7 @@ function createGoalEvaluationPrompt(input: {
     "你是 Relay 的目标评估器。请判断目标是否已经完成。",
     "",
     `目标：${input.goal.trim()}`,
+    `验收标准：${input.acceptanceCriteria?.trim() || "未提供。默认采取保守判断，除非已经有明确交付物且没有剩余工作。"}`,
     `当前轮次：${input.turnNumber}/${input.maxTurns}`,
     "",
     "最近 assistant 最终回答：",
@@ -567,9 +600,11 @@ function createGoalEvaluationPrompt(input: {
     "请只返回严格 JSON，不要输出 Markdown，不要输出解释。",
     'JSON 结构必须是：{"done":boolean,"reason":string,"nextUserPrompt":string|null}',
     "规则：",
-    "1. 只有在目标已经被实质完成时 done 才能为 true。",
-    "2. 如果目标未完成，nextUserPrompt 必须是一条可以直接继续推进任务的 user message。",
-    "3. 如果仍可继续推进，不要要求人类补充输入。",
+    "1. 只有在目标已经被实质完成，且所有验收标准都已满足时，done 才能为 true。",
+    "2. 如果没有提供验收标准，默认采取保守判断；只有在已经形成明确交付物、没有待办项、没有缺口、没有建议的下一步时，done 才能为 true。",
+    "3. 只要 assistant 回答里出现“还差什么 / 下一步 / 还需要 / 尚未验证 / 仍需确认 / 如果继续”的信号，done 必须为 false。",
+    "4. 如果目标未完成，nextUserPrompt 必须是一条可以直接继续推进任务的 user message，优先瞄准尚未满足的验收标准。",
+    "5. 如果仍可继续推进，不要要求人类补充输入。",
   ].join("\n");
 }
 

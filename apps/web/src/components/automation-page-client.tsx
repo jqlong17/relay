@@ -52,7 +52,11 @@ type CodexFormState = {
 
 type GoalFormState = {
   title: string;
+  actionType: "continue-session" | "generate-timeline-memory";
+  triggerKind: "manual" | "turn-interval";
+  triggerTurnInterval: number;
   goal: string;
+  acceptanceCriteria: string;
   status: "active" | "paused";
   workspaceId: string | null;
   targetSessionMode: "existing-session" | "new-session";
@@ -157,8 +161,6 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
   const selectedInternalItem = selectedItem?.kind === "internal" ? selectedItem : null;
   const selectedGoalItem =
     selectedInternalItem?.raw.kind === "goal-loop" ? selectedInternalItem.raw : null;
-  const selectedCheckpointItem =
-    selectedInternalItem?.raw.kind === "timeline-memory-checkpoint" ? selectedInternalItem.raw : null;
   const codexItems = useMemo(
     () => filteredItems.filter((item): item is Extract<AutomationListItem, { kind: "codex" }> => item.kind === "codex"),
     [filteredItems],
@@ -167,6 +169,9 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
     () => filteredItems.filter((item): item is Extract<AutomationListItem, { kind: "internal" }> => item.kind === "internal"),
     [filteredItems],
   );
+  const goalRequiresExistingSession = requiresExistingGoalSession(goalForm.actionType, goalForm.triggerKind);
+  const goalUsesTurnIntervalTrigger = goalForm.triggerKind === "turn-interval";
+  const goalUsesContinueSessionAction = goalForm.actionType === "continue-session";
 
   async function refresh() {
     setIsLoading(true);
@@ -277,6 +282,49 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
       setGoalForm(fromGoalAutomation(selectedItem.raw, activeWorkspaceId));
     }
   }, [activeWorkspaceId, isCreateMode, selectedItem]);
+
+  useEffect(() => {
+    const firstSession = sessions[0] ?? null;
+    const selectedSession = sessions.find((item) => item.id === goalForm.targetSessionId) ?? firstSession;
+
+    if (goalRequiresExistingSession && goalForm.targetSessionMode !== "existing-session") {
+      setGoalForm((current) => ({
+        ...current,
+        targetSessionMode: "existing-session",
+        targetSessionId: selectedSession?.id ?? "",
+        targetSessionTitle: selectedSession?.title ?? current.targetSessionTitle,
+      }));
+      return;
+    }
+
+    if (goalForm.targetSessionMode !== "existing-session") {
+      return;
+    }
+
+    if (!goalForm.targetSessionId && selectedSession) {
+      setGoalForm((current) => ({
+        ...current,
+        targetSessionId: selectedSession.id,
+        targetSessionTitle: selectedSession.title,
+      }));
+      return;
+    }
+
+    if (goalForm.targetSessionId && !sessions.some((item) => item.id === goalForm.targetSessionId)) {
+      setGoalForm((current) => ({
+        ...current,
+        targetSessionId: selectedSession?.id ?? "",
+        targetSessionTitle: selectedSession?.title ?? current.targetSessionTitle,
+      }));
+    }
+  }, [
+    goalForm.actionType,
+    goalForm.targetSessionId,
+    goalForm.targetSessionMode,
+    goalForm.triggerKind,
+    goalRequiresExistingSession,
+    sessions,
+  ]);
 
   useEffect(() => {
     if (prefillAppliedRef.current) {
@@ -469,7 +517,11 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
         setSelectedRun(completedRun);
       } else {
         await startAutomationRule(selectedItem.id);
-        setRunNotice(language === "zh" ? "目标自动推进已启动。" : "Goal automation started.");
+        setRunNotice(
+          selectedGoalItem?.actionType === "generate-timeline-memory"
+            ? (language === "zh" ? "规则已执行，结果已刷新。" : "Rule executed and refreshed.")
+            : (language === "zh" ? "目标自动推进已启动。" : "Goal automation started."),
+        );
       }
 
       await refresh();
@@ -564,9 +616,7 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
         ? (language === "zh" ? "规则详情与配置" : "Rule details and settings")
         : selectedGoalItem
           ? (language === "zh" ? "目标规则详情" : "Goal automation details")
-          : selectedCheckpointItem
-            ? (language === "zh" ? "内部规则详情" : "Internal rule details")
-            : (language === "zh" ? "自动化详情" : "Automation details");
+          : (language === "zh" ? "自动化详情" : "Automation details");
   const rightPanelMeta =
     rightPanelMode === "create"
       ? createKind === "goal-loop"
@@ -726,9 +776,9 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
             </div>
           ) : (
             <div className="automation-panel-sections">
-              <section className="automation-panel-section automation-inspector">
+              <section className="automation-panel-section automation-summary-strip">
                 <div className="memory-automation-head">
-                  <span>{language === "zh" ? "规则概览" : "Rule overview"}</span>
+                  <span>{language === "zh" ? "当前规则" : "Current rule"}</span>
                   {!isCreateMode && selectedItem ? (
                     <span className={`automation-status-pill automation-status-${selectedItem.status.toLowerCase()}`}>{selectedItem.statusLabel}</span>
                   ) : (
@@ -755,7 +805,7 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                         <span>{language === "zh" ? "类型" : "type"}</span>
                         <strong>
                           {createKind === "goal-loop"
-                            ? (language === "zh" ? "目标自动推进" : "goal loop")
+                            ? formatGoalActionTypeLabel(goalForm.actionType, language)
                             : codexForm.scheduleKind === "hourly"
                               ? (language === "zh" ? "时间调度 / 小时间隔" : "schedule / hourly")
                               : (language === "zh" ? "时间调度 / 每周时刻" : "schedule / weekly")}
@@ -773,26 +823,24 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                         <span>{language === "zh" ? "执行方式" : "schedule"}</span>
                         <strong>
                           {createKind === "goal-loop"
-                            ? (language === "zh"
-                                ? `手动启动 / ${goalForm.targetSessionMode === "existing-session" ? "绑定现有会话" : "新建专用会话"}`
-                                : `manual / ${goalForm.targetSessionMode === "existing-session" ? "existing session" : "new dedicated session"}`)
+                            ? formatGoalTriggerSummary(
+                                {
+                                  trigger: {
+                                    kind: goalForm.triggerKind,
+                                    turnInterval: goalUsesTurnIntervalTrigger ? goalForm.triggerTurnInterval : null,
+                                  },
+                                  targetSessionMode: goalRequiresExistingSession ? "existing-session" : goalForm.targetSessionMode,
+                                },
+                                language,
+                              )
                             : describeSchedule(toCodexAutomationInput(codexForm).rrule, language)}
                         </strong>
                       </div>
                     </div>
-                    <p className="automation-panel-description">
-                      {createKind === "goal-loop"
-                        ? (language === "zh"
-                            ? "创建后你可以手动启动它。Relay 会围绕目标自动多轮推进，并由模型自动评估是否完成。"
-                            : "After creation you can start it manually. Relay will continue multi-turn progress toward the goal and evaluate completion automatically.")
-                        : (language === "zh"
-                            ? "填写下方表单后即可创建。创建成功后，这条规则会出现在左侧列表，并支持手动运行、编辑和删除。"
-                            : "Complete the form below to create the rule. After creation it will appear in the list and can be run, edited, or deleted.")}
-                    </p>
                   </>
                 ) : selectedItem ? (
                   <>
-                    <div className="automation-inspector-top">
+                    <div className="automation-inspector-top automation-inspector-top-compact">
                       <strong>{selectedItem.name}</strong>
                       <span className={`automation-status-pill automation-status-${selectedItem.status.toLowerCase()}`}>{selectedItem.statusLabel}</span>
                     </div>
@@ -824,9 +872,6 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                     </div>
                     {selectedItem.runtimeLabel ? (
                       <p className="automation-panel-description">{selectedItem.runtimeLabel}</p>
-                    ) : null}
-                    {selectedItem.description ? (
-                      <p className="automation-panel-description">{selectedItem.description}</p>
                     ) : null}
 
                     {selectedCodexItem ? (
@@ -862,16 +907,20 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                         >
                           {busyActionId === selectedGoalItem.id
                             ? (language === "zh" ? "处理中..." : "Working...")
-                            : (language === "zh" ? "手动启动" : "Start")}
+                            : selectedGoalItem.actionType === "generate-timeline-memory"
+                              ? (language === "zh" ? "立即执行" : "Run now")
+                              : (language === "zh" ? "手动启动" : "Start")}
                         </button>
-                        <button
-                          className="automation-secondary-action"
-                          disabled={busyActionId === selectedGoalItem.id || !selectedGoalItem.capabilities.canStop}
-                          onClick={() => void handleStopSelected()}
-                          type="button"
-                        >
-                          {language === "zh" ? "停止" : "Stop"}
-                        </button>
+                        {selectedGoalItem.actionType === "continue-session" ? (
+                          <button
+                            className="automation-secondary-action"
+                            disabled={busyActionId === selectedGoalItem.id || !selectedGoalItem.capabilities.canStop}
+                            onClick={() => void handleStopSelected()}
+                            type="button"
+                          >
+                            {language === "zh" ? "停止" : "Stop"}
+                          </button>
+                        ) : null}
                         <button
                           className="automation-danger-action"
                           disabled={busyActionId === selectedGoalItem.id || !selectedGoalItem.capabilities.canDelete}
@@ -881,14 +930,6 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                           {language === "zh" ? "删除规则" : "Delete rule"}
                         </button>
                       </div>
-                    ) : null}
-
-                    {selectedCheckpointItem ? (
-                      <p className="automation-inspector-note">
-                        {language === "zh"
-                          ? "这是 Relay 系统内置规则，只展示真实状态，不支持编辑、删除或手动运行。"
-                          : "This is a Relay built-in rule. It is shown for visibility only and cannot be edited, deleted, or started manually."}
-                      </p>
                     ) : null}
                   </>
                 ) : null}
@@ -1010,20 +1051,6 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
 
                         <section className="automation-form-group automation-field-wide">
                           <div className="automation-form-group-head">
-                            <span>{language === "zh" ? "执行内容" : "Execution"}</span>
-                          </div>
-                          <label className="automation-field">
-                            <span>{language === "zh" ? "提示词" : "Prompt"}</span>
-                            <textarea
-                              rows={7}
-                              value={codexForm.prompt}
-                              onChange={(event) => setCodexForm((current) => ({ ...current, prompt: event.target.value }))}
-                            />
-                          </label>
-                        </section>
-
-                        <section className="automation-form-group automation-field-wide">
-                          <div className="automation-form-group-head">
                             <span>{language === "zh" ? "调度规则" : "Schedule"}</span>
                           </div>
                           <div className="automation-form-grid">
@@ -1090,6 +1117,20 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                             )}
                           </div>
                         </section>
+
+                        <section className="automation-form-group automation-field-wide">
+                          <div className="automation-form-group-head">
+                            <span>{language === "zh" ? "执行内容" : "Execution"}</span>
+                          </div>
+                          <label className="automation-field">
+                            <span>{language === "zh" ? "提示词" : "Prompt"}</span>
+                            <textarea
+                              rows={7}
+                              value={codexForm.prompt}
+                              onChange={(event) => setCodexForm((current) => ({ ...current, prompt: event.target.value }))}
+                            />
+                          </label>
+                        </section>
                       </div>
                     </>
                   ) : null}
@@ -1098,7 +1139,7 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                     <div className="automation-form">
                       <section className="automation-form-group automation-field-wide">
                         <div className="automation-form-group-head">
-                          <span>{language === "zh" ? "目标定义" : "Goal"}</span>
+                          <span>{language === "zh" ? "规则定义" : "Rule definition"}</span>
                         </div>
                         <div className="automation-form-grid">
                           <label className="automation-field">
@@ -1120,23 +1161,37 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                             </select>
                           </label>
                           <label className="automation-field">
-                            <span>{language === "zh" ? "目标会话" : "Target session"}</span>
+                            <span>{language === "zh" ? "动作" : "Action"}</span>
                             <select
                               disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
-                              value={goalForm.targetSessionMode}
+                              value={goalForm.actionType}
                               onChange={(event) =>
                                 setGoalForm((current) => ({
                                   ...current,
-                                  targetSessionMode: event.target.value as "existing-session" | "new-session",
-                                  targetSessionId:
-                                    event.target.value === "existing-session"
-                                      ? (sessions[0]?.id ?? current.targetSessionId)
-                                      : "",
+                                  actionType: event.target.value as GoalFormState["actionType"],
                                 }))
                               }
                             >
-                              <option value="existing-session">{language === "zh" ? "绑定现有会话" : "Bind existing session"}</option>
-                              <option value="new-session">{language === "zh" ? "新建专用会话" : "Create dedicated session"}</option>
+                              <option value="continue-session">{language === "zh" ? "继续推进会话" : "Continue session"}</option>
+                              <option value="generate-timeline-memory">
+                                {language === "zh" ? "生成时间线记忆" : "Generate timeline memory"}
+                              </option>
+                            </select>
+                          </label>
+                          <label className="automation-field">
+                            <span>{language === "zh" ? "触发条件" : "Trigger"}</span>
+                            <select
+                              disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
+                              value={goalForm.triggerKind}
+                              onChange={(event) =>
+                                setGoalForm((current) => ({
+                                  ...current,
+                                  triggerKind: event.target.value as GoalFormState["triggerKind"],
+                                }))
+                              }
+                            >
+                              <option value="manual">{language === "zh" ? "手动触发" : "Manual"}</option>
+                              <option value="turn-interval">{language === "zh" ? "按轮次触发" : "Turn interval"}</option>
                             </select>
                           </label>
                           <label className="automation-field">
@@ -1154,10 +1209,50 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                               ))}
                             </select>
                           </label>
+                          <label className="automation-field">
+                            <span>{language === "zh" ? "目标会话" : "Target session"}</span>
+                            <select
+                              disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit) || goalRequiresExistingSession}
+                              value={goalRequiresExistingSession ? "existing-session" : goalForm.targetSessionMode}
+                              onChange={(event) =>
+                                setGoalForm((current) => ({
+                                  ...current,
+                                  targetSessionMode: event.target.value as "existing-session" | "new-session",
+                                  targetSessionId:
+                                    event.target.value === "existing-session"
+                                      ? (sessions[0]?.id ?? current.targetSessionId)
+                                      : "",
+                                }))
+                              }
+                            >
+                              <option value="existing-session">{language === "zh" ? "绑定现有会话" : "Bind existing session"}</option>
+                              {!goalRequiresExistingSession ? (
+                                <option value="new-session">{language === "zh" ? "新建专用会话" : "Create dedicated session"}</option>
+                              ) : null}
+                            </select>
+                          </label>
+                          {goalUsesTurnIntervalTrigger ? (
+                            <label className="automation-field">
+                              <span>{language === "zh" ? "轮次间隔" : "Turn interval"}</span>
+                              <input
+                                disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
+                                type="number"
+                                min={1}
+                                max={200}
+                                value={goalForm.triggerTurnInterval}
+                                onChange={(event) =>
+                                  setGoalForm((current) => ({
+                                    ...current,
+                                    triggerTurnInterval: Number(event.target.value) || 1,
+                                  }))
+                                }
+                              />
+                            </label>
+                          ) : null}
                         </div>
                       </section>
 
-                      {goalForm.targetSessionMode === "existing-session" ? (
+                      {(goalRequiresExistingSession || goalForm.targetSessionMode === "existing-session") ? (
                         <section className="automation-form-group automation-field-wide">
                           <div className="automation-form-group-head">
                             <span>{language === "zh" ? "绑定会话" : "Bound session"}</span>
@@ -1189,53 +1284,77 @@ export function AutomationPageClient({ language }: AutomationPageClientProps) {
                         </section>
                       ) : null}
 
-                      <section className="automation-form-group automation-field-wide">
-                        <div className="automation-form-group-head">
-                          <span>{language === "zh" ? "执行目标" : "Execution goal"}</span>
-                        </div>
-                        <label className="automation-field">
-                          <span>{language === "zh" ? "目标描述" : "Goal"}</span>
-                          <textarea
-                            ref={goalInputRef}
-                            disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
-                            rows={8}
-                            value={goalForm.goal}
-                            onChange={(event) => setGoalForm((current) => ({ ...current, goal: event.target.value }))}
-                          />
-                        </label>
-                      </section>
+                      {goalUsesContinueSessionAction ? (
+                        <>
+                          <section className="automation-form-group automation-field-wide">
+                            <div className="automation-form-group-head">
+                              <span>{language === "zh" ? "执行目标" : "Execution goal"}</span>
+                            </div>
+                            <label className="automation-field">
+                              <span>{language === "zh" ? "目标描述" : "Goal"}</span>
+                              <textarea
+                                ref={goalInputRef}
+                                disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
+                                rows={8}
+                                value={goalForm.goal}
+                                onChange={(event) => setGoalForm((current) => ({ ...current, goal: event.target.value }))}
+                              />
+                            </label>
+                            <label className="automation-field">
+                              <span>{language === "zh" ? "验收标准" : "Acceptance criteria"}</span>
+                              <textarea
+                                disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
+                                rows={5}
+                                placeholder={
+                                  language === "zh"
+                                    ? "推荐填写。写清楚什么情况下才算目标完成，例如：\n1. 给出项目介绍\n2. 补充架构和运行链路\n3. 指出当前状态和后续缺口"
+                                    : "Recommended. Define what must be true before the goal is considered complete."
+                                }
+                                value={goalForm.acceptanceCriteria}
+                                onChange={(event) => setGoalForm((current) => ({ ...current, acceptanceCriteria: event.target.value }))}
+                              />
+                            </label>
+                          </section>
 
-                      <section className="automation-form-group automation-field-wide">
-                        <div className="automation-form-group-head">
-                          <span>{language === "zh" ? "安全边界" : "Safety limits"}</span>
-                        </div>
-                        <div className="automation-form-grid">
-                          <label className="automation-field">
-                            <span>{language === "zh" ? "最大轮次" : "Max turns"}</span>
-                            <input
-                              disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
-                              type="number"
-                              min={1}
-                              max={50}
-                              value={goalForm.maxTurns}
-                              onChange={(event) => setGoalForm((current) => ({ ...current, maxTurns: Number(event.target.value) || 1 }))}
-                            />
-                          </label>
-                          <label className="automation-field">
-                            <span>{language === "zh" ? "最长运行时长（分钟）" : "Max duration (minutes)"}</span>
-                            <input
-                              disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
-                              type="number"
-                              min={5}
-                              max={720}
-                              value={goalForm.maxDurationMinutes}
-                              onChange={(event) =>
-                                setGoalForm((current) => ({ ...current, maxDurationMinutes: Number(event.target.value) || 5 }))
-                              }
-                            />
-                          </label>
-                        </div>
-                      </section>
+                          <section className="automation-form-group automation-field-wide">
+                            <div className="automation-form-group-head">
+                              <span>{language === "zh" ? "安全边界" : "Safety limits"}</span>
+                            </div>
+                            <div className="automation-form-grid">
+                              <label className="automation-field">
+                                <span>{language === "zh" ? "最大轮次" : "Max turns"}</span>
+                                <input
+                                  disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
+                                  type="number"
+                                  min={1}
+                                  max={50}
+                                  value={goalForm.maxTurns}
+                                  onChange={(event) => setGoalForm((current) => ({ ...current, maxTurns: Number(event.target.value) || 1 }))}
+                                />
+                              </label>
+                              <label className="automation-field">
+                                <span>{language === "zh" ? "最长运行时长（分钟）" : "Max duration (minutes)"}</span>
+                                <input
+                                  disabled={Boolean(selectedGoalItem && !selectedGoalItem.capabilities.canEdit)}
+                                  type="number"
+                                  min={5}
+                                  max={720}
+                                  value={goalForm.maxDurationMinutes}
+                                  onChange={(event) =>
+                                    setGoalForm((current) => ({ ...current, maxDurationMinutes: Number(event.target.value) || 5 }))
+                                  }
+                                />
+                              </label>
+                            </div>
+                          </section>
+                        </>
+                      ) : (
+                        <p className="automation-inspector-note">
+                          {language === "zh"
+                            ? "这个动作会为绑定会话生成一条 timeline memory，不需要填写目标描述或验收标准。"
+                            : "This action generates a timeline memory for the bound session and does not require a goal or acceptance criteria."}
+                        </p>
+                      )}
                     </div>
                   ) : null}
 
@@ -1361,7 +1480,11 @@ function createDefaultCodexForm(cwd: string): CodexFormState {
 function createDefaultGoalForm(workspaceId: string | null): GoalFormState {
   return {
     title: "",
+    actionType: "continue-session",
+    triggerKind: "manual",
+    triggerTurnInterval: 20,
     goal: "",
+    acceptanceCriteria: "",
     status: "active",
     workspaceId,
     targetSessionMode: "new-session",
@@ -1416,14 +1539,22 @@ function fromCodexAutomation(item: CodexAutomation): CodexFormState {
 }
 
 function toGoalAutomationInput(form: GoalFormState, fallbackWorkspaceId: string | null): GoalAutomationRuleInput {
+  const targetSessionMode = requiresExistingGoalSession(form.actionType, form.triggerKind)
+    ? "existing-session"
+    : form.targetSessionMode;
+
   return {
     title: form.title.trim(),
-    goal: form.goal.trim(),
+    actionType: form.actionType,
+    triggerKind: form.triggerKind,
+    triggerTurnInterval: form.triggerKind === "turn-interval" ? clamp(form.triggerTurnInterval, 1, 200) : null,
+    goal: form.actionType === "continue-session" ? form.goal.trim() : null,
+    acceptanceCriteria: form.actionType === "continue-session" ? form.acceptanceCriteria.trim() || null : null,
     status: form.status,
     workspaceId: form.workspaceId ?? fallbackWorkspaceId,
-    targetSessionMode: form.targetSessionMode,
-    targetSessionId: form.targetSessionMode === "existing-session" ? form.targetSessionId || null : null,
-    targetSessionTitle: form.targetSessionMode === "new-session" ? form.targetSessionTitle.trim() || form.title.trim() || null : null,
+    targetSessionMode,
+    targetSessionId: targetSessionMode === "existing-session" ? form.targetSessionId || null : null,
+    targetSessionTitle: targetSessionMode === "new-session" ? form.targetSessionTitle.trim() || form.title.trim() || null : null,
     maxTurns: clamp(form.maxTurns, 1, 50),
     maxDurationMinutes: clamp(form.maxDurationMinutes, 5, 720),
   };
@@ -1432,7 +1563,11 @@ function toGoalAutomationInput(form: GoalFormState, fallbackWorkspaceId: string 
 function fromGoalAutomation(item: GoalAutomationRule, fallbackWorkspaceId: string | null): GoalFormState {
   return {
     title: item.title,
-    goal: item.goal,
+    actionType: item.actionType,
+    triggerKind: item.trigger.kind,
+    triggerTurnInterval: item.trigger.turnInterval ?? 20,
+    goal: item.goal ?? "",
+    acceptanceCriteria: item.acceptanceCriteria ?? "",
     status: item.status,
     workspaceId: item.workspaceId ?? fallbackWorkspaceId,
     targetSessionMode: item.targetSessionMode,
@@ -1488,40 +1623,7 @@ function mapCodexAutomation(item: CodexAutomation, language: AppLanguage): Autom
 }
 
 function mapInternalRule(item: AutomationRule, language: AppLanguage, workspaceLabels: Map<string, string>): AutomationListItem {
-  if (item.kind === "timeline-memory-checkpoint") {
-    return {
-      kind: "internal",
-      id: item.id,
-      name: item.title,
-      status: item.status === "paused" ? "PAUSED" : "ACTIVE",
-      filterStatus: item.status === "paused" ? "PAUSED" : "ACTIVE",
-      statusLabel: language === "zh" ? "启用中" : "active",
-      scheduleLabel: language === "zh" ? `每 ${item.intervalTurns} 轮触发一次` : `every ${item.intervalTurns} turns`,
-      description: item.summary,
-      sourceLabel: language === "zh" ? "relay 内部规则" : "relay internal rule",
-      typeLabel: language === "zh" ? "轮次检查点" : "turn checkpoint",
-      workspaceLabel: item.workspaceId ? workspaceLabels.get(item.workspaceId) ?? item.workspaceId : "-",
-      lastLabel: item.lastRunAt ? formatAbsoluteString(item.lastRunAt, language) : language === "zh" ? "暂无记录" : "no data",
-      nextLabel:
-        item.turnsUntilNextRun === null || item.nextCheckpointTurnCount === null
-          ? language === "zh" ? "暂无记录" : "no data"
-          : language === "zh"
-            ? `再经过 ${item.turnsUntilNextRun} 轮，在第 ${item.nextCheckpointTurnCount} 轮触发`
-            : `after ${item.turnsUntilNextRun} turns at ${item.nextCheckpointTurnCount}`,
-      runtimeLabel: null,
-      sessionLabel: item.sessionTitle,
-      raw: item,
-    };
-  }
-
-  const runtimeLabel =
-    item.runStatus === "running"
-      ? (language === "zh"
-          ? `运行中，第 ${item.currentTurnCount}/${item.maxTurns} 轮`
-          : `Running, turn ${item.currentTurnCount}/${item.maxTurns}`)
-      : item.stopReason
-        ? formatGoalStopReason(item.stopReason, language)
-        : item.lastEvaluationReason ?? null;
+  const runtimeLabel = formatGoalRuntimeLabel(item, language);
 
   return {
     kind: "internal",
@@ -1530,21 +1632,82 @@ function mapInternalRule(item: AutomationRule, language: AppLanguage, workspaceL
     status: item.status === "paused" ? "PAUSED" : "ACTIVE",
     filterStatus: item.status === "paused" ? "PAUSED" : "ACTIVE",
     statusLabel: item.status === "paused" ? "paused" : "active",
-    scheduleLabel: language === "zh"
-      ? `手动启动 / ${item.targetSessionMode === "existing-session" ? "绑定现有会话" : "新建专用会话"}`
-      : `manual / ${item.targetSessionMode === "existing-session" ? "existing session" : "new session"}`,
-    description: item.goal,
+    scheduleLabel: formatGoalTriggerSummary(item, language),
+    description: formatInternalRuleDescription(item, language),
     sourceLabel: language === "zh" ? "relay 内部规则" : "relay internal rule",
-    typeLabel: language === "zh" ? "目标自动推进" : "goal loop",
+    typeLabel: formatGoalActionTypeLabel(item.actionType, language),
     workspaceLabel: item.workspaceId ? workspaceLabels.get(item.workspaceId) ?? item.workspaceId : "-",
     lastLabel: item.lastRunAt ? formatAbsoluteString(item.lastRunAt, language) : language === "zh" ? "暂无记录" : "no data",
-    nextLabel: item.runStatus === "running"
-      ? (language === "zh" ? "等待当前运行结束" : "waiting for current run")
-      : (language === "zh" ? "手动启动" : "start manually"),
+    nextLabel: formatGoalNextLabel(item, language),
     runtimeLabel,
     sessionLabel: item.sessionTitle,
     raw: item,
   };
+}
+
+function requiresExistingGoalSession(
+  actionType: GoalFormState["actionType"],
+  triggerKind: GoalFormState["triggerKind"],
+) {
+  return actionType === "generate-timeline-memory" || triggerKind === "turn-interval";
+}
+
+function formatGoalActionTypeLabel(
+  actionType: GoalAutomationRule["actionType"],
+  language: AppLanguage,
+) {
+  if (actionType === "generate-timeline-memory") {
+    return language === "zh" ? "时间线记忆生成" : "timeline memory";
+  }
+
+  return language === "zh" ? "目标自动推进" : "goal loop";
+}
+
+function formatGoalTriggerSummary(
+  input: Pick<GoalAutomationRule, "trigger" | "targetSessionMode">,
+  language: AppLanguage,
+) {
+  if (input.trigger.kind === "turn-interval") {
+    const interval = input.trigger.turnInterval ?? 1;
+    return language === "zh" ? `每 ${interval} 轮触发一次` : `every ${interval} turns`;
+  }
+
+  return language === "zh"
+    ? `手动启动 / ${input.targetSessionMode === "existing-session" ? "绑定现有会话" : "新建专用会话"}`
+    : `manual / ${input.targetSessionMode === "existing-session" ? "existing session" : "new session"}`;
+}
+
+function formatInternalRuleDescription(item: GoalAutomationRule, language: AppLanguage) {
+  if (item.actionType === "generate-timeline-memory") {
+    if (item.trigger.kind === "turn-interval" && item.trigger.turnInterval) {
+      return language === "zh"
+        ? `为绑定会话每 ${item.trigger.turnInterval} 轮生成一次 timeline memory。`
+        : `Generate a timeline memory for the bound session every ${item.trigger.turnInterval} turns.`;
+    }
+
+    return item.summary;
+  }
+
+  if (item.acceptanceCriteria) {
+    return `${item.goal ?? item.summary}\n\n${language === "zh" ? "验收标准：" : "Acceptance criteria:"}\n${item.acceptanceCriteria}`;
+  }
+
+  return item.goal ?? item.summary;
+}
+
+function formatGoalNextLabel(item: GoalAutomationRule, language: AppLanguage) {
+  if (item.runStatus === "running") {
+    return language === "zh" ? "等待当前运行结束" : "waiting for current run";
+  }
+
+  if (item.trigger.kind === "turn-interval") {
+    const interval = item.trigger.turnInterval ?? 1;
+    return language === "zh"
+      ? `等待下一个 ${interval} 轮触发点`
+      : `waiting for the next ${interval}-turn checkpoint`;
+  }
+
+  return language === "zh" ? "手动启动" : "start manually";
 }
 
 function mapCodexRun(run: CodexAutomationRun): AutomationRunViewItem {
@@ -1617,6 +1780,79 @@ function formatGoalStopReason(value: GoalAutomationRule["stopReason"], language:
     return language === "zh" ? "运行失败" : "failed";
   }
   return null;
+}
+
+function formatGoalRuntimeLabel(item: GoalAutomationRule, language: AppLanguage) {
+  if (item.actionType !== "continue-session") {
+    const conclusion = item.lastEvaluationReason ?? item.lastError ?? item.lastAssistantSummary ?? null;
+
+    if (item.stopReason === "failed" || item.runStatus === "failed") {
+      return joinGoalRuntimeParts([
+        language === "zh" ? "最近执行失败" : "last run failed",
+        conclusion,
+      ]);
+    }
+
+    if (item.lastRunAt) {
+      return joinGoalRuntimeParts([
+        language === "zh" ? "最近执行完成" : "last run completed",
+        conclusion,
+      ]);
+    }
+
+    return item.trigger.kind === "turn-interval"
+      ? (language === "zh"
+          ? `尚未触发 · 每 ${item.trigger.turnInterval ?? 1} 轮自动执行`
+          : `not triggered yet · runs every ${item.trigger.turnInterval ?? 1} turns`)
+      : (language === "zh" ? "尚未运行 · 可手动执行" : "not run yet · can be started manually");
+  }
+
+  const progress = formatGoalTurnProgress(item, language);
+  const conclusion = item.lastEvaluationReason ?? item.lastError ?? item.lastAssistantSummary ?? null;
+
+  if (item.runStatus === "running") {
+    return joinGoalRuntimeParts(
+      [
+        language === "zh" ? "运行中" : "running",
+        progress,
+        conclusion,
+      ],
+    );
+  }
+
+  if (item.stopReason) {
+    return joinGoalRuntimeParts([
+      formatGoalStopReason(item.stopReason, language),
+      progress,
+      conclusion,
+    ]);
+  }
+
+  if (item.currentTurnCount > 0) {
+    return joinGoalRuntimeParts([
+      language === "zh" ? "已结束" : "finished",
+      progress,
+      conclusion,
+    ]);
+  }
+
+  return language === "zh"
+    ? `尚未运行 · 最多 ${item.maxTurns} 轮 / ${item.maxDurationMinutes} 分钟`
+    : `not run yet · up to ${item.maxTurns} turns / ${item.maxDurationMinutes} minutes`;
+}
+
+function formatGoalTurnProgress(item: GoalAutomationRule, language: AppLanguage) {
+  if (item.currentTurnCount <= 0) {
+    return language === "zh" ? "0 轮进展" : "0 turns";
+  }
+
+  return language === "zh"
+    ? `第 ${item.currentTurnCount}/${item.maxTurns} 轮`
+    : `turn ${item.currentTurnCount}/${item.maxTurns}`;
+}
+
+function joinGoalRuntimeParts(parts: Array<string | null>) {
+  return parts.map((part) => part?.trim()).filter(Boolean).join(" · ");
 }
 
 function formatTimestamp(value: number | null, language: AppLanguage) {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { parse } from "smol-toml";
 
 type AppLanguage = "zh" | "en";
-type AppTheme = "dark" | "light";
+type AppTheme = "dark" | "light" | "tea" | "linen";
 type AppDensity = "compact" | "comfortable";
 type AppUiFont = "source-sans-3" | "ibm-plex-sans";
 type AppMonoFont = "jetbrains-mono" | "ibm-plex-mono";
@@ -30,8 +30,8 @@ const defaultUserUiToml = `# Relay UI 用户配置文件
 # 全局界面语言：zh / en
 language = "zh"
 
-# 全局主题：dark / light
-theme = "dark"
+# 全局主题：dark / light / tea / linen
+theme = "light"
 
 # 界面密度：compact / comfortable
 # compact = 当前默认的紧凑布局
@@ -61,6 +61,9 @@ workspaceLeftWidth = "240px"
 # workspace 页面中间主区域的最小宽度
 workspaceCenterMinWidth = "360px"
 
+# workspace 页面中间对话区的横向内边距
+workspaceCenterXPadding = "56px"
+
 # workspace 页面右侧 context 面板宽度
 workspaceRightWidth = "min(50vw, 720px)"
 
@@ -79,6 +82,12 @@ sessionsLeftWidth = "220px"
 
 # sessions 页面右侧 memory copilot 宽度
 sessionsRightWidth = "360px"
+
+# automation 页面左侧规则列表宽度
+automationListWidth = "320px"
+
+# automation 页面右侧详情区最小宽度
+automationDetailMinWidth = "780px"
 
 # memories 页面左侧时间轴比例
 memoriesLeftRatio = "0.72fr"
@@ -113,6 +122,51 @@ titleSm = "0.94rem"
 
 # 页面级标题
 title = "1rem"
+
+[overview]
+# 首页 / about 概览页品牌字尺寸
+heroBrandSize = "clamp(2.5rem, 5.4vw, 4.4rem)"
+
+# 首页 / about 概览页主标题尺寸
+heroTitleSize = "clamp(1.5rem, 3.3vw, 2.7rem)"
+
+# 首页 / about 概览页主标题移动端尺寸
+heroTitleSizeMobile = "clamp(1.65rem, 7.4vw, 2.35rem)"
+
+# 首页 / about 概览页说明文字尺寸
+heroBodySize = "clamp(0.94rem, 1.18vw, 1rem)"
+
+# 首页 / about 概览页章节标题尺寸
+sectionTitleSize = "clamp(1.08rem, 1.55vw, 1.5rem)"
+
+[shape]
+# 常规卡片/消息块圆角
+radiusMd = "10px"
+
+# 胶囊按钮/状态标签圆角
+radiusPill = "999px"
+
+[effects]
+# 浮层毛玻璃强度
+blurStrong = "18px"
+
+# workspace 底部输入区阴影
+shadowComposer = "0 -12px 24px rgba(2, 3, 4, 0.42)"
+
+# 底部吸附类面板阴影
+shadowRaised = "0 -16px 36px rgba(0, 0, 0, 0.28)"
+
+# 抽屉类面板阴影
+shadowDrawer = "0 -18px 48px rgba(0, 0, 0, 0.34)"
+
+# 下拉/菜单类浮层阴影
+shadowFloating = "0 18px 40px rgba(0, 0, 0, 0.42)"
+
+# 弹窗/对话框阴影
+shadowDialog = "0 16px 40px rgba(1, 2, 3, 0.46)"
+
+# 大型弹窗阴影
+shadowDialogStrong = "0 24px 64px rgba(1, 2, 3, 0.5)"
 `;
 
 const darkThemeTokens = {
@@ -151,48 +205,172 @@ const darkThemeTokens = {
     accentBorder: "rgba(255, 122, 26, 0.7)",
     codeText: "#cfd6e3",
   },
+  effects: {
+    blurStrong: "18px",
+    shadowComposer: "0 -12px 24px rgba(2, 3, 4, 0.42)",
+    shadowRaised: "0 -16px 36px rgba(0, 0, 0, 0.28)",
+    shadowDrawer: "0 -18px 48px rgba(0, 0, 0, 0.34)",
+    shadowFloating: "0 18px 40px rgba(0, 0, 0, 0.42)",
+    shadowDialog: "0 16px 40px rgba(1, 2, 3, 0.46)",
+    shadowDialogStrong: "0 24px 64px rgba(1, 2, 3, 0.5)",
+  },
 } as const;
 
 const lightThemeTokens = {
   color: {
-    bg: "#f6f8fb",
-    bgPanel: "#dde6f1",
-    bgSoft: "#eef3f8",
-    bgTopbar: "#edf2f7",
+    bg: "#f7f8f8",
+    bgPanel: "#edf0f1",
+    bgSoft: "#f9fafb",
+    bgTopbar: "#f3f5f6",
     bgElevated: "#ffffff",
-    bgSettings: "#f1f5f9",
-    line: "rgba(73, 89, 110, 0.12)",
-    lineStrong: "rgba(73, 89, 110, 0.22)",
-    text: "#1f2937",
-    textSoft: "#556274",
-    textDim: "#7b8796",
-    blue: "#2563eb",
-    green: "#16925b",
-    amber: "#b7791f",
-    red: "#dc4c64",
-    accent: "#ea6d3f",
+    bgSettings: "#f5f7f8",
+    line: "rgba(79, 86, 94, 0.11)",
+    lineStrong: "rgba(79, 86, 94, 0.18)",
+    text: "#2a3138",
+    textSoft: "#5e6872",
+    textDim: "#89939d",
+    blue: "#6f8fb2",
+    green: "#4f7c62",
+    amber: "#9d8866",
+    red: "#c46f7d",
+    accent: "#8b98a5",
   },
   surface: {
-    overlay: "rgba(20, 30, 45, 0.06)",
-    level1: "rgba(58, 87, 122, 0.03)",
-    level2: "rgba(58, 87, 122, 0.045)",
-    level3: "rgba(58, 87, 122, 0.06)",
-    level4: "rgba(58, 87, 122, 0.075)",
-    level5: "rgba(58, 87, 122, 0.09)",
-    sessionActive: "#d4dee9",
-    calendar1: "rgba(37, 99, 235, 0.14)",
-    calendar2: "rgba(37, 99, 235, 0.24)",
-    calendar3: "rgba(37, 99, 235, 0.38)",
-    legend1: "rgba(37, 99, 235, 0.16)",
-    legend2: "rgba(37, 99, 235, 0.3)",
-    legend3: "rgba(37, 99, 235, 0.5)",
-    accentBorder: "rgba(234, 109, 63, 0.55)",
-    codeText: "#273142",
+    overlay: "rgba(24, 30, 36, 0.05)",
+    level1: "rgba(87, 96, 105, 0.025)",
+    level2: "rgba(87, 96, 105, 0.04)",
+    level3: "rgba(87, 96, 105, 0.055)",
+    level4: "rgba(87, 96, 105, 0.07)",
+    level5: "rgba(87, 96, 105, 0.09)",
+    sessionActive: "#e6eaed",
+    calendar1: "rgba(111, 143, 178, 0.12)",
+    calendar2: "rgba(111, 143, 178, 0.2)",
+    calendar3: "rgba(111, 143, 178, 0.3)",
+    legend1: "rgba(111, 143, 178, 0.14)",
+    legend2: "rgba(111, 143, 178, 0.24)",
+    legend3: "rgba(111, 143, 178, 0.38)",
+    accentBorder: "rgba(139, 152, 165, 0.28)",
+    codeText: "#37414a",
+  },
+  effects: {
+    blurStrong: "18px",
+    shadowComposer: "0 -12px 24px rgba(77, 97, 122, 0.12)",
+    shadowRaised: "0 -16px 36px rgba(77, 97, 122, 0.12)",
+    shadowDrawer: "0 -18px 48px rgba(77, 97, 122, 0.14)",
+    shadowFloating: "0 18px 40px rgba(77, 97, 122, 0.16)",
+    shadowDialog: "0 16px 40px rgba(77, 97, 122, 0.14)",
+    shadowDialogStrong: "0 24px 64px rgba(77, 97, 122, 0.18)",
+  },
+} as const;
+
+const teaThemeTokens = {
+  color: {
+    bg: "#e7e0d2",
+    bgPanel: "#ddd3c0",
+    bgSoft: "#f2ebdf",
+    bgTopbar: "rgba(228, 220, 205, 0.94)",
+    bgElevated: "#f8f3ea",
+    bgSettings: "#efe6d8",
+    line: "rgba(92, 85, 67, 0.16)",
+    lineStrong: "rgba(92, 85, 67, 0.28)",
+    text: "#2f2a22",
+    textSoft: "#5c5543",
+    textDim: "#8c8473",
+    blue: "#7f9697",
+    green: "#5c5543",
+    amber: "#b19c6b",
+    red: "#9f6f5e",
+    accent: "#8f7a4e",
+  },
+  surface: {
+    overlay: "rgba(61, 47, 27, 0.06)",
+    level1: "rgba(255, 251, 244, 0.4)",
+    level2: "rgba(255, 250, 242, 0.56)",
+    level3: "rgba(250, 242, 228, 0.72)",
+    level4: "rgba(244, 233, 214, 0.82)",
+    level5: "rgba(238, 224, 201, 0.92)",
+    sessionActive: "#ede2cf",
+    calendar1: "rgba(177, 156, 107, 0.16)",
+    calendar2: "rgba(177, 156, 107, 0.28)",
+    calendar3: "rgba(92, 85, 67, 0.34)",
+    legend1: "rgba(177, 156, 107, 0.18)",
+    legend2: "rgba(177, 156, 107, 0.3)",
+    legend3: "rgba(92, 85, 67, 0.42)",
+    accentBorder: "rgba(143, 122, 78, 0.42)",
+    codeText: "#4d4535",
+  },
+  effects: {
+    blurStrong: "18px",
+    shadowComposer: "0 -12px 24px rgba(92, 85, 67, 0.14)",
+    shadowRaised: "0 -16px 36px rgba(92, 85, 67, 0.12)",
+    shadowDrawer: "0 -18px 48px rgba(92, 85, 67, 0.16)",
+    shadowFloating: "0 18px 40px rgba(92, 85, 67, 0.14)",
+    shadowDialog: "0 16px 40px rgba(92, 85, 67, 0.14)",
+    shadowDialogStrong: "0 24px 64px rgba(92, 85, 67, 0.16)",
+  },
+} as const;
+
+const linenThemeTokens = {
+  color: {
+    bg: "#fbfbf9",
+    bgPanel: "#f6f7f4",
+    bgSoft: "#ffffff",
+    bgTopbar: "rgba(250, 250, 247, 0.94)",
+    bgElevated: "#ffffff",
+    bgSettings: "#f9faf7",
+    line: "rgba(82, 88, 96, 0.1)",
+    lineStrong: "rgba(82, 88, 96, 0.16)",
+    text: "#2f3338",
+    textSoft: "#606871",
+    textDim: "#8a939d",
+    blue: "#8ea0b2",
+    green: "#6d7568",
+    amber: "#b9afa0",
+    red: "#b48784",
+    accent: "#9da8b2",
+  },
+  surface: {
+    overlay: "rgba(31, 38, 46, 0.04)",
+    level1: "rgba(255, 255, 255, 0.82)",
+    level2: "rgba(251, 252, 253, 0.9)",
+    level3: "rgba(247, 248, 249, 0.94)",
+    level4: "rgba(241, 243, 245, 0.98)",
+    level5: "rgba(235, 238, 241, 1)",
+    sessionActive: "#eef1f4",
+    calendar1: "rgba(157, 168, 178, 0.12)",
+    calendar2: "rgba(157, 168, 178, 0.2)",
+    calendar3: "rgba(96, 104, 113, 0.24)",
+    legend1: "rgba(157, 168, 178, 0.14)",
+    legend2: "rgba(157, 168, 178, 0.24)",
+    legend3: "rgba(96, 104, 113, 0.3)",
+    accentBorder: "rgba(157, 168, 178, 0.24)",
+    codeText: "#4d5560",
+  },
+  effects: {
+    blurStrong: "18px",
+    shadowComposer: "0 -12px 24px rgba(82, 88, 96, 0.08)",
+    shadowRaised: "0 -16px 36px rgba(82, 88, 96, 0.06)",
+    shadowDrawer: "0 -18px 48px rgba(82, 88, 96, 0.08)",
+    shadowFloating: "0 18px 40px rgba(82, 88, 96, 0.08)",
+    shadowDialog: "0 16px 40px rgba(82, 88, 96, 0.1)",
+    shadowDialogStrong: "0 24px 64px rgba(82, 88, 96, 0.12)",
   },
 } as const;
 
 function getThemeTokens(theme: AppTheme) {
-  return theme === "light" ? lightThemeTokens : darkThemeTokens;
+  if (theme === "light") {
+    return lightThemeTokens;
+  }
+
+  if (theme === "linen") {
+    return linenThemeTokens;
+  }
+
+  if (theme === "tea") {
+    return teaThemeTokens;
+  }
+
+  return darkThemeTokens;
 }
 
 const compactDensityTokens = {
@@ -213,12 +391,15 @@ const compactDensityTokens = {
     settingsPanelWidth: "320px",
     workspaceLeftWidth: "240px",
     workspaceCenterMinWidth: "360px",
+    workspaceCenterXPadding: "48px",
     workspaceRightWidth: "min(50vw, 720px)",
     workspaceSidepanelPrimaryWidth: "420px",
     workspaceMessageMaxWidth: "80%",
     workspaceSystemMessageMaxWidth: "58%",
     sessionsLeftWidth: "220px",
     sessionsRightWidth: "360px",
+    automationListWidth: "320px",
+    automationDetailMinWidth: "780px",
     memoriesLeftRatio: "0.72fr",
     memoriesRightRatio: "1.28fr",
     memoriesRightMinWidth: "420px",
@@ -244,6 +425,17 @@ const compactDensityTokens = {
     titleSm: "0.94rem",
     title: "1rem",
   },
+  overview: {
+    heroBrandSize: "clamp(2.5rem, 5.4vw, 4.4rem)",
+    heroTitleSize: "clamp(1.5rem, 3.3vw, 2.7rem)",
+    heroTitleSizeMobile: "clamp(1.65rem, 7.4vw, 2.35rem)",
+    heroBodySize: "clamp(0.94rem, 1.18vw, 1rem)",
+    sectionTitleSize: "clamp(1.08rem, 1.55vw, 1.5rem)",
+  },
+  shape: {
+    radiusMd: "10px",
+    radiusPill: "999px",
+  },
 } as const;
 
 const comfortableDensityTokens = {
@@ -264,12 +456,15 @@ const comfortableDensityTokens = {
     settingsPanelWidth: "352px",
     workspaceLeftWidth: "268px",
     workspaceCenterMinWidth: "400px",
+    workspaceCenterXPadding: "64px",
     workspaceRightWidth: "min(54vw, 800px)",
     workspaceSidepanelPrimaryWidth: "460px",
     workspaceMessageMaxWidth: "78%",
     workspaceSystemMessageMaxWidth: "60%",
     sessionsLeftWidth: "248px",
     sessionsRightWidth: "396px",
+    automationListWidth: "344px",
+    automationDetailMinWidth: "840px",
     memoriesLeftRatio: "0.74fr",
     memoriesRightRatio: "1.26fr",
     memoriesRightMinWidth: "456px",
@@ -295,6 +490,17 @@ const comfortableDensityTokens = {
     titleSm: "1.06rem",
     title: "1.14rem",
   },
+  overview: {
+    heroBrandSize: "clamp(2.7rem, 5.8vw, 4.8rem)",
+    heroTitleSize: "clamp(1.62rem, 3.5vw, 2.9rem)",
+    heroTitleSizeMobile: "clamp(1.74rem, 7.8vw, 2.5rem)",
+    heroBodySize: "clamp(0.98rem, 1.28vw, 1.05rem)",
+    sectionTitleSize: "clamp(1.14rem, 1.7vw, 1.62rem)",
+  },
+  shape: {
+    radiusMd: "10px",
+    radiusPill: "999px",
+  },
 } as const;
 
 function getDensityTokens(density: AppDensity) {
@@ -303,14 +509,14 @@ function getDensityTokens(density: AppDensity) {
 
 const defaultUiConfig = {
   language: "zh" as AppLanguage,
-  theme: "dark" as AppTheme,
+  theme: "light" as AppTheme,
   density: "compact" as AppDensity,
   font: {
     ui: "source-sans-3" as AppUiFont,
     mono: "jetbrains-mono" as AppMonoFont,
     cjk: "noto-sans-sc" as AppCjkFont,
   },
-  ...getThemeTokens("dark"),
+  ...getThemeTokens("light"),
   ...getDensityTokens("compact"),
 } as const;
 
@@ -329,6 +535,9 @@ type UiConfig = {
   layout: DeepWiden<typeof compactDensityTokens.layout>;
   measure: DeepWiden<typeof compactDensityTokens.measure>;
   typography: DeepWiden<typeof compactDensityTokens.typography>;
+  overview: DeepWiden<typeof compactDensityTokens.overview>;
+  shape: DeepWiden<typeof compactDensityTokens.shape>;
+  effects: DeepWiden<typeof darkThemeTokens.effects>;
 };
 
 type UserUiConfig = {
@@ -342,6 +551,9 @@ type UserUiConfig = {
   layout?: Partial<UiConfig["layout"]>;
   measure?: Partial<UiConfig["measure"]>;
   typography?: Partial<UiConfig["typography"]>;
+  overview?: Partial<UiConfig["overview"]>;
+  shape?: Partial<UiConfig["shape"]>;
+  effects?: Partial<UiConfig["effects"]>;
 };
 
 function mergeUiConfig(base: UiConfig, override: UserUiConfig): UiConfig {
@@ -361,7 +573,14 @@ function mergeUiConfig(base: UiConfig, override: UserUiConfig): UiConfig {
     layout: { ...densityTokens.layout, ...override.layout },
     measure: { ...densityTokens.measure, ...override.measure },
     typography: { ...densityTokens.typography, ...override.typography },
+    overview: { ...densityTokens.overview, ...override.overview },
+    shape: { ...densityTokens.shape, ...override.shape },
+    effects: { ...themeTokens.effects, ...override.effects },
   };
+}
+
+function parseUserUiConfigText(tomlText: string): UserUiConfig {
+  return parse(tomlText) as UserUiConfig;
 }
 
 function findUserConfigPath() {
@@ -383,12 +602,16 @@ export function loadUiConfig(): UiConfig {
 
   try {
     const tomlText = fs.readFileSync(configPath, "utf8");
-    const parsed = parse(tomlText) as UserUiConfig;
+    const parsed = parseUserUiConfigText(tomlText);
     return mergeUiConfig(defaultUiConfig, parsed);
   } catch (error) {
     console.error("Failed to load relay.ui.toml, falling back to defaults.", error);
     return defaultUiConfig;
   }
+}
+
+export function resolveUiConfig(override: UserUiConfig = {}): UiConfig {
+  return mergeUiConfig(defaultUiConfig, override);
 }
 
 export function getUiCssVariables(config: UiConfig): CSSProperties {
@@ -438,12 +661,15 @@ export function getUiCssVariables(config: UiConfig): CSSProperties {
     "--settings-panel-width": config.layout.settingsPanelWidth,
     "--workspace-left-width": config.layout.workspaceLeftWidth,
     "--workspace-center-min-width": config.layout.workspaceCenterMinWidth,
+    "--workspace-center-x-padding": config.layout.workspaceCenterXPadding,
     "--workspace-right-width": config.layout.workspaceRightWidth,
     "--workspace-sidepanel-primary-width": config.layout.workspaceSidepanelPrimaryWidth,
     "--workspace-message-max-width": config.layout.workspaceMessageMaxWidth,
     "--workspace-system-message-max-width": config.layout.workspaceSystemMessageMaxWidth,
     "--sessions-left-width": config.layout.sessionsLeftWidth,
     "--sessions-right-width": config.layout.sessionsRightWidth,
+    "--automation-list-width": config.layout.automationListWidth,
+    "--automation-detail-min-width": config.layout.automationDetailMinWidth,
     "--memories-left-ratio": config.layout.memoriesLeftRatio,
     "--memories-right-ratio": config.layout.memoriesRightRatio,
     "--memories-right-min-width": config.layout.memoriesRightMinWidth,
@@ -464,8 +690,22 @@ export function getUiCssVariables(config: UiConfig): CSSProperties {
     "--font-nav": config.typography.nav,
     "--font-title-sm": config.typography.titleSm,
     "--font-title": config.typography.title,
+    "--overview-hero-brand-size": config.overview.heroBrandSize,
+    "--overview-hero-title-size": config.overview.heroTitleSize,
+    "--overview-hero-title-size-mobile": config.overview.heroTitleSizeMobile,
+    "--overview-hero-body-size": config.overview.heroBodySize,
+    "--overview-section-title-size": config.overview.sectionTitleSize,
+    "--radius-md": config.shape.radiusMd,
+    "--radius-pill": config.shape.radiusPill,
+    "--blur-strong": config.effects.blurStrong,
+    "--shadow-composer": config.effects.shadowComposer,
+    "--shadow-raised": config.effects.shadowRaised,
+    "--shadow-drawer": config.effects.shadowDrawer,
+    "--shadow-floating": config.effects.shadowFloating,
+    "--shadow-dialog": config.effects.shadowDialog,
+    "--shadow-dialog-strong": config.effects.shadowDialogStrong,
   } as CSSProperties;
 }
 
-export { defaultUserUiToml };
+export { defaultUserUiToml, parseUserUiConfigText };
 export type { AppLanguage, AppTheme, AppDensity, AppUiFont, AppMonoFont, AppCjkFont, UiConfig, UserUiConfig };

@@ -2,7 +2,7 @@ type AutomationStatus = "active" | "paused";
 
 type AutomationSource = "relay";
 
-type AutomationKind = "timeline-memory-checkpoint" | "goal-loop";
+type AutomationKind = "goal-loop";
 
 type AutomationCapabilities = {
   canEdit: boolean;
@@ -12,6 +12,13 @@ type AutomationCapabilities = {
 };
 
 type GoalAutomationTargetSessionMode = "existing-session" | "new-session";
+type GoalAutomationTriggerKind = "manual" | "turn-interval";
+type GoalAutomationActionType = "continue-session" | "generate-timeline-memory";
+
+type GoalAutomationTrigger = {
+  kind: GoalAutomationTriggerKind;
+  turnInterval: number | null;
+};
 
 type GoalAutomationRunStatus = "idle" | "running" | "completed" | "stopped" | "failed";
 
@@ -38,18 +45,12 @@ type AutomationRuleBase = {
   capabilities: AutomationCapabilities;
 };
 
-type TimelineMemoryCheckpointAutomationRule = AutomationRuleBase & {
-  kind: "timeline-memory-checkpoint";
-  intervalTurns: number;
-  currentTurnCount: number | null;
-  turnsUntilNextRun: number | null;
-  nextCheckpointTurnCount: number | null;
-};
-
 type GoalAutomationRule = AutomationRuleBase & {
   kind: "goal-loop";
-  goal: string;
-  trigger: "manual";
+  actionType: GoalAutomationActionType;
+  trigger: GoalAutomationTrigger;
+  goal: string | null;
+  acceptanceCriteria: string | null;
   targetSessionMode: GoalAutomationTargetSessionMode;
   maxTurns: number;
   maxDurationMinutes: number;
@@ -64,10 +65,14 @@ type GoalAutomationRule = AutomationRuleBase & {
 
 type GoalAutomationRuleInput = {
   title: string;
-  goal: string;
+  actionType?: GoalAutomationActionType;
+  triggerKind?: GoalAutomationTriggerKind;
+  triggerTurnInterval?: number | null;
+  goal?: string | null;
+  acceptanceCriteria?: string | null;
   status?: AutomationStatus;
   workspaceId?: string | null;
-  targetSessionMode: GoalAutomationTargetSessionMode;
+  targetSessionMode?: GoalAutomationTargetSessionMode;
   targetSessionId?: string | null;
   targetSessionTitle?: string | null;
   maxTurns?: number;
@@ -77,8 +82,11 @@ type GoalAutomationRuleInput = {
 type GoalAutomationRuleDefinition = {
   id: string;
   kind: "goal-loop";
+  actionType: GoalAutomationActionType;
+  trigger: GoalAutomationTrigger;
   title: string;
-  goal: string;
+  goal: string | null;
+  acceptanceCriteria: string | null;
   status: AutomationStatus;
   workspaceId: string;
   targetSessionMode: GoalAutomationTargetSessionMode;
@@ -133,15 +141,17 @@ type GoalAutomationRunState = {
   lastError: string | null;
   latestRunId: string | null;
   latestUserPrompt: string | null;
+  lastTriggeredTurnCount: number | null;
   sessionId: string | null;
   sessionTitle: string | null;
   recentRuns: GoalAutomationRunRecord[];
 };
 
-type AutomationRule = TimelineMemoryCheckpointAutomationRule | GoalAutomationRule;
+type AutomationRule = GoalAutomationRule;
 
 export type {
   AutomationCapabilities,
+  GoalAutomationActionType,
   AutomationKind,
   AutomationRule,
   AutomationSource,
@@ -154,6 +164,7 @@ export type {
   GoalAutomationRunStatus,
   GoalAutomationRunStep,
   GoalAutomationStopReason,
+  GoalAutomationTrigger,
+  GoalAutomationTriggerKind,
   GoalAutomationTargetSessionMode,
-  TimelineMemoryCheckpointAutomationRule,
 };

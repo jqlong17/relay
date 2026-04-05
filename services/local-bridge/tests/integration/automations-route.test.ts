@@ -9,7 +9,7 @@ import type { AutomationRule, GoalAutomationRunRecord } from "@relay/shared-type
 
 import { createBridgeServer } from "../../src";
 import { CodexAppServerService, type AppServerNotification, type AppServerThread } from "../../src/services/codex-app-server";
-import { MemoryStore, createThemeKey } from "../../src/services/memory-store";
+import { MemoryStore } from "../../src/services/memory-store";
 import { RelayStateStore } from "../../src/services/relay-state-store";
 import { WorkspaceStore } from "../../src/services/workspace-store";
 
@@ -44,47 +44,31 @@ afterEach(async () => {
 });
 
 describe("automations route", () => {
-  it("returns the real turn-checkpoint automation for the active workspace", async () => {
+  it("returns configured turn-triggered internal rules instead of a built-in checkpoint rule", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-automations-route-"));
     tempDirs.push(dir);
     activeMemoryStore = new MemoryStore(path.join(dir, "relay-memory.db"));
-    const workspaceStore = new WorkspaceStore(new RelayStateStore(path.join(dir, "relay-state.json")));
+    const relayStateStore = new RelayStateStore(path.join(dir, "relay-state.json"));
+    const workspaceStore = new WorkspaceStore(relayStateStore);
     const workspace = workspaceStore.open(dir);
-
-    workspaceStore.saveSessionListSnapshot(workspace.id, [
-      {
-        id: "session-1",
-        workspaceId: workspace.id,
-        title: "当前会话",
-        turnCount: 34,
-        messages: [],
-        createdAt: "2026-04-04T04:00:00.000Z",
-        updatedAt: "2026-04-04T04:35:00.000Z",
+    relayStateStore.saveInternalAutomationRule({
+      id: "timeline-memory-rule-1",
+      kind: "goal-loop",
+      actionType: "generate-timeline-memory",
+      trigger: {
+        kind: "turn-interval",
+        turnInterval: 20,
       },
-    ]);
-    workspaceStore.saveSessionDetailSnapshot({
-      id: "session-1",
+      title: "按轮次自动整理",
+      goal: null,
+      acceptanceCriteria: null,
+      status: "active",
       workspaceId: workspace.id,
-      title: "当前会话",
-      turnCount: 34,
-      messages: [],
-      createdAt: "2026-04-04T04:00:00.000Z",
-      updatedAt: "2026-04-04T04:35:00.000Z",
-    });
-    workspaceStore.setPreferredSessionId(workspace.id, "session-1");
-
-    activeMemoryStore.create({
-      sessionId: "session-1",
-      workspaceId: workspace.id,
-      themeTitle: "当前会话",
-      themeKey: createThemeKey("当前会话"),
-      sessionTitleSnapshot: "当前会话",
-      memoryDate: "2026-04-04",
-      checkpointTurnCount: 20,
-      promptVersion: "timeline-memory/v1",
-      title: "当前会话 · 20轮时间线记忆",
-      content: "内容",
-      status: "completed",
+      targetSessionMode: "existing-session",
+      targetSessionId: "session-1",
+      targetSessionTitle: "当前会话",
+      maxTurns: 10,
+      maxDurationMinutes: 120,
       createdAt: "2026-04-04T04:40:00.000Z",
       updatedAt: "2026-04-04T04:40:00.000Z",
     });
@@ -108,22 +92,19 @@ describe("automations route", () => {
     const address = activeServer.address() as AddressInfo;
     const response = await fetch(`http://127.0.0.1:${address.port}/automations`);
     const data = (await response.json()) as {
-      items: Array<{
-        id: string;
-        intervalTurns: number;
-        turnsUntilNextRun: number | null;
-        nextCheckpointTurnCount: number | null;
-        lastRunAt: string | null;
-      }>;
+      items: AutomationRule[];
     };
 
     expect(response.status).toBe(200);
     expect(data.items).toHaveLength(1);
-    expect(data.items[0]?.id).toBe("timeline-memory-turn-checkpoint");
-    expect(data.items[0]?.intervalTurns).toBe(20);
-    expect(data.items[0]?.turnsUntilNextRun).toBe(6);
-    expect(data.items[0]?.nextCheckpointTurnCount).toBe(40);
-    expect(data.items[0]?.lastRunAt).toBe("2026-04-04T04:40:00.000Z");
+    expect(data.items[0]?.id).toBe("timeline-memory-rule-1");
+    if (data.items[0]?.kind === "goal-loop") {
+      expect(data.items[0].actionType).toBe("generate-timeline-memory");
+      expect(data.items[0].trigger).toEqual({
+        kind: "turn-interval",
+        turnInterval: 20,
+      });
+    }
   });
 
   it("creates, starts, and records a goal-loop automation run", async () => {
@@ -134,6 +115,7 @@ describe("automations route", () => {
     workspaceStore.open(dir);
     const threads: AppServerThread[] = [];
     let threadCounter = 0;
+    const evaluationPrompts: string[] = [];
 
     activeServer = createBridgeServer({
       memoryStore: activeMemoryStore,
@@ -177,6 +159,9 @@ describe("automations route", () => {
           }
 
           const text = input.find((item) => item.type === "text")?.text ?? "";
+          if (threadId.startsWith("eval-thread")) {
+            evaluationPrompts.push(text);
+          }
           const assistantText = threadId.startsWith("eval-thread")
             ? '{"done":true,"reason":"目标已完成","nextUserPrompt":null}'
             : "目标推进已经完成。";
@@ -253,6 +238,7 @@ describe("automations route", () => {
         kind: "goal-loop",
         title: "目标自动推进",
         goal: "完成一个真实的自动推进测试",
+        acceptanceCriteria: "必须完成一次真实运行，并记录运行历史与会话信息。",
         targetSessionMode: "new-session",
         maxTurns: 10,
         maxDurationMinutes: 120,
@@ -285,6 +271,7 @@ describe("automations route", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]?.status).toBe("completed");
     expect(runs[0]?.summary).toContain("目标已完成");
+    expect(evaluationPrompts[0]).toContain("验收标准：必须完成一次真实运行，并记录运行历史与会话信息。");
 
     const listResponse = await fetch(`http://127.0.0.1:${address.port}/automations`);
     const listData = (await listResponse.json()) as {
@@ -294,6 +281,7 @@ describe("automations route", () => {
 
     expect(goalItem?.kind).toBe("goal-loop");
     expect(goalItem?.sessionId).toBe("goal-thread-1");
+    expect(goalItem?.acceptanceCriteria).toBe("必须完成一次真实运行，并记录运行历史与会话信息。");
   });
 
   it("normalizes stale running goal-loop rules after bridge restart so they can be managed again", async () => {
@@ -307,8 +295,14 @@ describe("automations route", () => {
     relayStateStore.saveInternalAutomationRule({
       id: "goal-stale-1",
       kind: "goal-loop",
+      actionType: "continue-session",
+      trigger: {
+        kind: "manual",
+        turnInterval: null,
+      },
       title: "Stale Goal",
       goal: "finish the stale run",
+      acceptanceCriteria: "create a concrete deliverable",
       status: "active",
       workspaceId: workspace.id,
       targetSessionMode: "new-session",
@@ -332,6 +326,7 @@ describe("automations route", () => {
       lastError: null,
       latestRunId: "stale-run-1",
       latestUserPrompt: "continue",
+      lastTriggeredTurnCount: null,
       sessionId: "stale-session-1",
       sessionTitle: "Stale Session",
       recentRuns: [],

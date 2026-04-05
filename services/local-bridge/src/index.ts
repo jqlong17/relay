@@ -3,6 +3,7 @@ import http from "node:http";
 import { MemoryStore } from "@relay/memory-core";
 
 import { handleAutomationsRoute } from "./routes/automations";
+import { handleDeviceRoute } from "./routes/device";
 import { handleFilesRoute } from "./routes/files";
 import { getHealthPayload } from "./routes/health";
 import { handleMemoriesRoute } from "./routes/memories";
@@ -11,6 +12,8 @@ import { handleSessionsRoute } from "./routes/sessions";
 import { handleWorkspacesRoute } from "./routes/workspaces";
 import { AutomationService } from "./services/automation-service";
 import { CodexAppServerService } from "./services/codex-app-server";
+import { DeviceBindingService } from "./services/device-binding-service";
+import { LocalDeviceService } from "./services/local-device-service";
 import { pickWorkspaceFolder } from "./services/workspace-picker";
 import { RelayStateStore } from "./services/relay-state-store";
 import { RuntimeEventBus } from "./services/runtime-event-bus";
@@ -24,8 +27,10 @@ type BridgeServerDependencies = {
   sessionStore?: SessionStore;
   memoryStore?: MemoryStore;
   codexAppServerService?: CodexAppServerService;
+  deviceBindingService?: DeviceBindingService;
   timelineMemoryService?: TimelineMemoryService;
   automationService?: AutomationService;
+  localDeviceService?: LocalDeviceService;
   runtimeEventBus?: RuntimeEventBus;
   workspacePicker?: () => Promise<string | null>;
   finderOpener?: (targetPath: string, isDirectory: boolean) => void;
@@ -41,6 +46,12 @@ function createBridgeServer(dependencies: BridgeServerDependencies = {}) {
   const memoryStore = dependencies.memoryStore ?? new MemoryStore();
   const codexAppServerService =
     dependencies.codexAppServerService ?? new CodexAppServerService();
+  const deviceBindingService =
+    dependencies.deviceBindingService ??
+    new DeviceBindingService();
+  const localDeviceService =
+    dependencies.localDeviceService ??
+    new LocalDeviceService(relayStateStore);
   const runtimeEventBus = dependencies.runtimeEventBus ?? new RuntimeEventBus();
   const timelineMemoryService =
     dependencies.timelineMemoryService ??
@@ -65,6 +76,10 @@ function createBridgeServer(dependencies: BridgeServerDependencies = {}) {
 
   return http.createServer((request, response) => {
     void (async () => {
+      if (await handleDeviceRoute(request, response, localDeviceService, deviceBindingService)) {
+        return;
+      }
+
       if (await handleWorkspacesRoute(request, response, workspaceStore, workspacePicker, codexAppServerService)) {
         return;
       }
@@ -101,7 +116,7 @@ function createBridgeServer(dependencies: BridgeServerDependencies = {}) {
           workspaceStore,
           sessionStore,
           codexAppServerService,
-          timelineMemoryService,
+          automationService,
           runtimeEventBus,
         )
       ) {

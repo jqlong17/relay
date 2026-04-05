@@ -537,6 +537,7 @@ function flattenTurnsToMessages(sessionId: string, turns: AppServerTurn[], creat
               ? "assistant"
               : "system",
         content,
+        meta: deriveThreadItemMeta(item),
         status: turn.status === "failed" ? "error" : "completed",
         sequence,
         createdAt: timestamp,
@@ -582,16 +583,60 @@ function formatThreadItemContent(
   }
 
   if (item.type === "plan") {
-    return `**Plan**\n${item.text}`;
+    return item.text;
   }
 
   if (item.type === "reasoning") {
     const reasoningText = item.summary?.join("") || item.content?.join("") || "";
-    return `**Thinking**\n${reasoningText}`;
+    return reasoningText;
   }
 
   const output = item.aggregatedOutput?.trim() ? `\n${item.aggregatedOutput}` : "";
-  return `**Command**\n$ ${item.command}${output}`;
+  return `$ ${item.command}${output}`;
+}
+
+function deriveThreadItemMeta(
+  item:
+    | { type: "userMessage"; id: string; content: AppServerUserInput[] }
+    | { type: "agentMessage"; id: string; text: string }
+    | { type: "plan"; id: string; text: string }
+    | { type: "reasoning"; id: string; summary?: string[]; content?: string[] }
+    | { type: "commandExecution"; id: string; command: string; aggregatedOutput?: string | null },
+) {
+  if (item.type === "plan") {
+    return {
+      kind: "process" as const,
+      process: {
+        itemId: item.id,
+        phase: "plan" as const,
+        label: "Plan",
+      },
+    };
+  }
+
+  if (item.type === "reasoning") {
+    return {
+      kind: "process" as const,
+      process: {
+        itemId: item.id,
+        phase: "thinking" as const,
+        label: "Thinking",
+      },
+    };
+  }
+
+  if (item.type === "commandExecution") {
+    return {
+      kind: "process" as const,
+      process: {
+        itemId: item.id,
+        phase: "command" as const,
+        label: item.command,
+      },
+    };
+  }
+
+  return undefined;
 }
 
 function deriveTitle(thread: AppServerThread) {

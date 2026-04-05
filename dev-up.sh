@@ -6,6 +6,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ECOSYSTEM_FILE="$ROOT_DIR/ecosystem.config.cjs"
 BRIDGE_URL="${RELAY_LOCAL_BRIDGE_URL:-http://127.0.0.1:4242}"
 WEB_URL="${RELAY_WEB_URL:-http://localhost:3000}"
+ENV_FILE="$ROOT_DIR/.env.local"
+
+load_env_file() {
+  local env_file="$1"
+
+  if [[ ! -f "$env_file" ]]; then
+    return 0
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
 
 wait_for_url() {
   local name="$1"
@@ -27,13 +41,14 @@ wait_for_url() {
 }
 
 cd "$ROOT_DIR"
+load_env_file "$ENV_FILE"
 
 if ! command -v pm2 >/dev/null 2>&1; then
   echo "pm2 is required but was not found in PATH." >&2
   exit 1
 fi
 
-pm2 start "$ECOSYSTEM_FILE"
+pm2 start "$ECOSYSTEM_FILE" --update-env
 
 wait_for_url "local-bridge" "$BRIDGE_URL/health"
 wait_for_url "web" "$WEB_URL"

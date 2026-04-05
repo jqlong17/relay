@@ -4,6 +4,7 @@ import type {
   GoalAutomationRule,
   GoalAutomationRuleInput,
   GoalAutomationRunRecord,
+  RelayDevice,
   RuntimeEvent,
   Session,
   TimelineMemory,
@@ -47,6 +48,10 @@ type GoalAutomationRunsResponse = {
   items: GoalAutomationRunRecord[];
 };
 
+type LocalDeviceResponse = {
+  item: RelayDevice;
+};
+
 type BridgeRuntimeEvent =
   | RuntimeEvent
   | {
@@ -69,6 +74,17 @@ type SessionAttachment = {
 
 async function listWorkspaces() {
   return fetchJson<{ items: Workspace[]; active: Workspace | null }>("/api/bridge/workspaces");
+}
+
+async function getLocalDevice() {
+  return fetchJson<LocalDeviceResponse>("/api/bridge/device");
+}
+
+async function bindLocalDevice(code: string) {
+  return fetchJson<LocalDeviceResponse>("/api/bridge/device/bind", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
 }
 
 async function openWorkspace(localPath: string) {
@@ -335,7 +351,9 @@ async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
 
 export {
   archiveSession,
+  bindLocalDevice,
   createSession,
+  getLocalDevice,
   getFilePreview,
   getFileTree,
   getSession,

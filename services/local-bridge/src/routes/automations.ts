@@ -44,7 +44,7 @@ async function handleAutomationsRoute(
     const ruleId = pathname.replace("/automations/", "").replace("/start", "");
 
     if (request.method === "POST") {
-      writeJson(response, 200, { item: automationService.startRule(ruleId) });
+      writeJson(response, 200, { item: await automationService.startRule(ruleId) });
       return true;
     }
   }
