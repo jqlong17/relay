@@ -267,6 +267,21 @@ describe("WorkspaceClient", () => {
     expect(screen.getByText("项目介绍、架构和当前状态都已覆盖，满足这次自动化实验的目标。")).toBeTruthy();
   });
 
+  it("shows cloud relay pending copy instead of local bridge localhost errors in public web mode", async () => {
+    bridgeMocks.listWorkspaces.mockRejectedValue(new Error("Local bridge is offline. Start services/local-bridge on http://127.0.0.1:4242."));
+    bridgeMocks.getLocalDevice.mockRejectedValue(new Error("offline"));
+    deviceBootstrapMocks.ensureCurrentGitHubDeviceReady.mockRejectedValue(new Error("offline"));
+
+    render(<WorkspaceClient language="zh" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("已识别账号和默认设备，但云端转发链路还未接入。当前只能查看状态，暂时不能直接连到你的本机 Relay。")).toBeTruthy();
+    });
+
+    expect(screen.getByText("公网 Web")).toBeTruthy();
+    expect(screen.getByText("云端会话")).toBeTruthy();
+  });
+
   it("shows the current relay device and default device in the workspace header", async () => {
     render(<WorkspaceClient language="zh" />);
 

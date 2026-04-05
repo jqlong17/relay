@@ -179,7 +179,9 @@ describe("SettingsPageClient", () => {
     });
 
     expect(screen.getAllByText("user-1")).toHaveLength(2);
+    expect(screen.getAllByText("云端 Web 会话")).toHaveLength(2);
+    expect(screen.getAllByText("本机状态不可直读").length).toBeGreaterThan(0);
+    expect(screen.getByText("当前运行在公网 Web 环境，账号态和云端设备目录可用，但无法直接读取这台服务器上的本机 Relay。")).toBeTruthy();
     expect(screen.getAllByText("Relay Mac")).toHaveLength(2);
-    expect(screen.getAllByText("错误").length).toBeGreaterThan(0);
   });
 });

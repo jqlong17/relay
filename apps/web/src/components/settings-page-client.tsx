@@ -51,6 +51,14 @@ function isCurrentLocalCloudDevice(cloudDevice: RelayCloudDevice, localDevice: R
   return localDevice !== null && cloudDevice.localDeviceId === localDevice.id;
 }
 
+function isCloudWebSession(
+  authSession: RelayAuthSessionResponse["session"] | null,
+  localDevice: RelayDevice | null,
+  deviceDirectory: RelayDeviceDirectory | null,
+) {
+  return authSession?.method === "github" && localDevice === null && deviceDirectory !== null;
+}
+
 export function SettingsPageClient({ language }: SettingsPageClientProps) {
   const router = useRouter();
   const messages = getMessages(language);
@@ -346,6 +354,8 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
       ? messages.settings.bound
       : localDevice
         ? messages.settings.unbound
+        : authSession?.method === "github" && deviceDirectory !== null
+          ? messages.settings.localRelayUnavailable
         : identityState === "loading"
           ? messages.settings.loading
           : messages.settings.error;
@@ -384,6 +394,7 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
             : messages.settings.synced;
   const defaultCloudDevice =
     deviceDirectory?.items.find((item) => item.id === deviceDirectory.defaultDeviceId) ?? null;
+  const isCloudSession = isCloudWebSession(authSession, localDevice, deviceDirectory);
   const defaultDeviceName = defaultCloudDevice?.name ?? messages.settings.notSet;
   const deviceCountLabel =
     deviceDirectoryState === "loading"
@@ -392,14 +403,29 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
         ? `${deviceDirectory.items.length}`
         : messages.settings.notSet;
   const localDeviceSummaryLabel =
-    localDevice?.name ?? (identityState === "loading" ? messages.settings.loading : messages.settings.notSet);
+    localDevice?.name
+      ?? (identityState === "loading"
+        ? messages.settings.loading
+        : isCloudSession
+          ? messages.settings.cloudSession
+          : messages.settings.notSet);
   const defaultDeviceSummaryLabel =
     deviceDirectoryState === "loading" && !deviceDirectory ? messages.settings.loading : defaultDeviceName;
+  const localDeviceSummaryMeta =
+    localDevice
+      ? bindingStatusLabel
+      : isCloudSession
+        ? messages.settings.localRelayUnavailable
+        : identityState === "loading"
+          ? messages.settings.loading
+          : messages.settings.notSet;
   const accountAndDeviceHint =
     identityState === "loading"
       ? messages.settings.loading
       : authSession?.method === "password"
         ? messages.settings.accountAndDeviceHintPassword
+        : isCloudSession
+          ? messages.settings.cloudSessionHint
         : authSession?.method === "github" && localDevice?.bindingStatus === "bound" && localDevice.boundUserId === authSession.userId
           ? messages.settings.accountAndDeviceHintBound
           : authSession?.method === "github" && deviceDirectoryState === "loading"
@@ -448,7 +474,7 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
               <article className="settings-overview-card">
                 <span className="settings-overview-label">{messages.settings.localDevice}</span>
                 <strong className="settings-overview-value">{localDeviceSummaryLabel}</strong>
-                <p className="settings-overview-meta">{bindingStatusLabel}</p>
+                <p className="settings-overview-meta">{localDeviceSummaryMeta}</p>
               </article>
               <article className="settings-overview-card">
                 <span className="settings-overview-label">{messages.settings.devices}</span>
@@ -478,18 +504,23 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
                 <dt>{messages.settings.userId}</dt>
                 <dd>{authSession?.userId ?? "—"}</dd>
                 <dt>{messages.settings.localDevice}</dt>
-                <dd>{localDevice?.name ?? "—"}</dd>
+                <dd>{localDevice?.name ?? (isCloudSession ? messages.settings.cloudSession : "—")}</dd>
                 <dt>{messages.settings.hostname}</dt>
                 <dd>{localDevice?.hostname ?? "—"}</dd>
                 <dt>{messages.settings.devicePlatform}</dt>
-                <dd>{devicePlatformLabel}</dd>
+                <dd>{localDevice ? devicePlatformLabel : isCloudSession ? messages.settings.localRelayUnavailable : devicePlatformLabel}</dd>
                 <dt>{messages.settings.deviceBinding}</dt>
-                <dd>{bindingStatusLabel}</dd>
+                <dd>{localDevice ? bindingStatusLabel : isCloudSession ? messages.settings.localRelayUnavailable : bindingStatusLabel}</dd>
                 <dt>{messages.settings.defaultDevice}</dt>
                 <dd>{defaultDeviceName}</dd>
                 <dt>{messages.settings.deviceId}</dt>
                 <dd>{localDevice?.id ?? "—"}</dd>
               </dl>
+              {isCloudSession ? (
+                <p className="settings-section-copy settings-section-copy-compact">
+                  {messages.settings.localRelayUnavailableDetail}
+                </p>
+              ) : null}
               <div className="settings-editor-actions">
                 <div className="settings-editor-actions-left">
                   <button
@@ -506,6 +537,8 @@ export function SettingsPageClient({ language }: SettingsPageClientProps) {
                     ? bindError ?? messages.settings.bindFailed
                     : bindState === "done"
                       ? messages.settings.bindSucceeded
+                      : isCloudSession
+                        ? messages.settings.localRelayUnavailableDetail
                       : authSession?.method !== "github"
                         ? messages.settings.bindErrorPasswordOnly
                         : null}

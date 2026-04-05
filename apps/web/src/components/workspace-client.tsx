@@ -135,6 +135,14 @@ const WORKSPACE_SIDEPANEL_PRIMARY_MIN_WIDTH = 240;
 const WORKSPACE_SIDEPANEL_SECONDARY_MIN_WIDTH = 240;
 const WORKSPACE_RESIZER_WIDTH = 8;
 
+function isLocalBridgeOfflineError(message: string | null | undefined) {
+  if (!message) {
+    return false;
+  }
+
+  return message.includes("Local bridge is offline") || message.includes("local bridge is unavailable");
+}
+
 export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const workspaceLayout = layout ?? DEFAULT_WORKSPACE_LAYOUT;
   const messages = getMessages(language);
@@ -309,16 +317,32 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   }, [layoutWidths.sidepanelPrimary, workspaceLayout.workspaceSidepanelPrimaryWidth]);
   const defaultRelayDevice =
     deviceDirectory?.items.find((item) => item.id === deviceDirectory.defaultDeviceId) ?? null;
+  const isCloudWebSession =
+    authSession?.method === "github" && localRelayDevice === null && deviceDirectory !== null;
   const isUsingDefaultRelayDevice =
     !!defaultRelayDevice && !!localRelayDevice && defaultRelayDevice.localDeviceId === localRelayDevice.id;
+  const currentRelayLabel = isCloudWebSession
+    ? messages.workspace.publicCloudRelayValue
+    : localRelayDevice?.name ?? messages.settings.loading;
   const workspaceDeviceStatusText =
     deviceRouteState === "loading" && authSession?.method === "github"
       ? messages.workspace.deviceRouteLoading
+      : isCloudWebSession
+        ? messages.workspace.publicCloudRoutePending
       : authSession?.method === "github" && defaultRelayDevice
         ? isUsingDefaultRelayDevice
           ? messages.workspace.deviceRouteReady
           : messages.workspace.deviceRouteMismatch
         : messages.workspace.deviceRouteUnknown;
+  const normalizeWorkspaceError = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : bridgeOfflineMessage;
+
+    if (isCloudWebSession && isLocalBridgeOfflineError(message)) {
+      return messages.workspace.publicCloudRoutePending;
+    }
+
+    return message;
+  }, [bridgeOfflineMessage, isCloudWebSession, messages.workspace.publicCloudRoutePending]);
 
   const loadSessionDetail = useCallback(async (sessionId: string) => {
     const cachedSession = sessionCacheRef.current.get(sessionId);
@@ -354,12 +378,12 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       const memoryResponse = await getSessionMemories(sessionId);
       setSessionMemories(memoryResponse.items);
     } catch (memoryError) {
-      setError(memoryError instanceof Error ? memoryError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(memoryError));
       setSessionMemories([]);
     } finally {
       setIsMemoriesLoading(false);
     }
-  }, [bridgeOfflineMessage]);
+  }, [normalizeWorkspaceError]);
 
   const loadAutomationRules = useCallback(async () => {
     setIsAutomationRulesLoading(true);
@@ -368,12 +392,12 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       const automationResponse = await listAutomations();
       setAutomationRules(automationResponse.items);
     } catch (automationError) {
-      setError(automationError instanceof Error ? automationError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(automationError));
       setAutomationRules([]);
     } finally {
       setIsAutomationRulesLoading(false);
     }
-  }, [bridgeOfflineMessage]);
+  }, [normalizeWorkspaceError]);
 
   const refreshAutomationRulesInBackground = useCallback(async () => {
     try {
@@ -509,7 +533,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         void refreshSessionListInBackground(targetSessionId);
       }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(loadError));
       setWorkspaces([]);
       setSessions([]);
       setActiveSessionId(null);
@@ -524,7 +548,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       setIsLoading(false);
       setIsAutomationRulesLoading(false);
     }
-  }, [bridgeOfflineMessage, loadSessionDetail, refreshSessionDetailInBackground, refreshSessionListInBackground]);
+  }, [loadSessionDetail, normalizeWorkspaceError, refreshSessionDetailInBackground, refreshSessionListInBackground]);
 
   useEffect(() => {
     void refreshWorkspaceData();
@@ -837,7 +861,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
       await refreshWorkspaceData();
     } catch (openError) {
-      setError(openError instanceof Error ? openError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(openError));
     }
   }
 
@@ -851,7 +875,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       const created = await createSession(`Session ${new Date().toLocaleTimeString()}`);
       await refreshWorkspaceData(created.item.id);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(createError));
     }
   }
 
@@ -898,10 +922,10 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         void refreshSessionDetailInBackground(sessionId);
       }
     } catch (sessionError) {
-      setError(sessionError instanceof Error ? sessionError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(sessionError));
       setIsActiveSessionLoading(false);
     }
-  }, [bridgeOfflineMessage, loadSessionDetail, loadSessionMemories, refreshSessionDetailInBackground, startSessionSwitchTransition]);
+  }, [loadSessionDetail, loadSessionMemories, normalizeWorkspaceError, refreshSessionDetailInBackground, startSessionSwitchTransition]);
 
   const handlePrefetchSession = useCallback((sessionId: string) => {
     if (sessionCacheRef.current.has(sessionId) || pendingSessionRequestsRef.current.has(sessionId)) {
@@ -924,7 +948,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
           const subtree = await getFileTree({ path: node.path, depth: 2 });
           setFileTree((current) => mergeFileTreeNode(current, subtree.item));
         } catch (treeError) {
-          setError(treeError instanceof Error ? treeError.message : bridgeOfflineMessage);
+          setError(normalizeWorkspaceError(treeError));
           return;
         }
       }
@@ -952,7 +976,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       const response = await getFilePreview(node.path);
       setPreview(response.item);
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(previewError));
     } finally {
       setIsPreviewLoading(false);
     }
@@ -968,11 +992,11 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       const response = await getFilePreview(filePath);
       setPreview(response.item);
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(previewError));
     } finally {
       setIsPreviewLoading(false);
     }
-  }, [bridgeOfflineMessage]);
+  }, [normalizeWorkspaceError]);
 
   const handleMarkdownLinkClick = useCallback((event: MouseEvent<HTMLElement>) => {
     const target = event.target;
@@ -1001,7 +1025,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       setError(null);
       await openInFinder(node.path);
     } catch (finderError) {
-      setError(finderError instanceof Error ? finderError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(finderError));
     }
   }
 
@@ -1043,7 +1067,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       setActiveSession(sessionDetail.item);
       await loadSessionMemories(nextActiveSessionId);
     } catch (archiveError) {
-      setError(archiveError instanceof Error ? archiveError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(archiveError));
     } finally {
       setIsArchiving(false);
     }
@@ -1109,7 +1133,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       setRenameCandidate(null);
       setRenameValue("");
     } catch (renameError) {
-      setError(renameError instanceof Error ? renameError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(renameError));
     } finally {
       setIsRenaming(false);
     }
@@ -1122,7 +1146,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       await removeWorkspace(workspaceId);
       await refreshWorkspaceData();
     } catch (removeError) {
-      setError(removeError instanceof Error ? removeError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(removeError));
     }
   }
 
@@ -1236,7 +1260,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
           });
           shouldFollowCurrentRunRef.current = false;
         } catch (runError) {
-          setError(runError instanceof Error ? runError.message : bridgeOfflineMessage);
+          setError(normalizeWorkspaceError(runError));
           setActiveSession((current) => markStreamingMessageErrored(current));
           queueMicrotask(() => {
             scrollToCurrentMessage("smooth");
@@ -1303,7 +1327,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
       const uploaded = await Promise.all(imageFiles.map((file) => uploadSessionImage(activeSession.id, file)));
       setAttachments((current) => [...current, ...uploaded.map((item) => item.item)]);
     } catch (pasteError) {
-      setError(pasteError instanceof Error ? pasteError.message : bridgeOfflineMessage);
+      setError(normalizeWorkspaceError(pasteError));
     }
   }
 
@@ -1519,9 +1543,11 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
           >
             <div className="workspace-device-strip-main">
               <div className="workspace-device-chip">
-                <span className="workspace-device-chip-label">{messages.workspace.currentDeviceLabel}</span>
+                <span className="workspace-device-chip-label">
+                  {isCloudWebSession ? messages.workspace.publicCloudRelayLabel : messages.workspace.currentDeviceLabel}
+                </span>
                 <strong className="workspace-device-chip-value">
-                  {localRelayDevice?.name ?? messages.settings.loading}
+                  {currentRelayLabel}
                 </strong>
               </div>
               {authSession?.method === "github" ? (
