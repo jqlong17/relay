@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import type { RelayAgentEnvelope, RelayBridgeHeaders } from "@relay/shared-types";
+import { cookies } from "next/headers";
+import type { RelayBridgeHeaders } from "@relay/shared-types";
 
-import { getRelayHub } from "@/lib/realtime/relay-hub";
+import { readSessionToken } from "@/lib/auth/session";
 import { isLocalOnlyBridgePath, resolveBridgeRouteStatus } from "@/lib/realtime/bridge-target";
+import { requestRemoteBridge } from "@/lib/realtime/cloud-relay-store";
 
 const DEFAULT_BRIDGE_URL = "http://127.0.0.1:4242";
 
@@ -25,23 +27,25 @@ async function bridgeFetch(pathname: string, init?: RequestInit) {
     throw new BridgeRouteUnavailableError(buildUnavailableRouteMessage(routeStatus.reason));
   }
 
+  const cookieStore = await cookies();
+  const relaySession = await readSessionToken(cookieStore.get("relay_session")?.value);
+
+  if (!relaySession?.sub || relaySession.method !== "github") {
+    throw new BridgeRouteUnavailableError("GitHub sign-in is required before proxying a remote Relay device.");
+  }
+
   const method = (init?.method ?? "GET").toUpperCase() as "DELETE" | "GET" | "PATCH" | "POST";
   const headers = normalizeBridgeHeaders(init?.headers);
   const body = typeof init?.body === "string" ? init.body : undefined;
-  const event: RelayAgentEnvelope = {
-    type: "agent.request",
-    request: {
-      id: crypto.randomUUID(),
-      kind: "bridge-http",
-      method,
-      path: pathname,
-      headers,
-      body,
-      sentAt: new Date().toISOString(),
-    },
-  };
 
-  return getRelayHub().requestBridge(routeStatus.defaultLocalDeviceId, event);
+  return requestRemoteBridge({
+    localDeviceId: routeStatus.defaultLocalDeviceId,
+    userId: relaySession.sub,
+    method,
+    path: pathname,
+    headers,
+    body,
+  });
 }
 
 async function proxyBridge(pathname: string, init?: RequestInit) {
@@ -58,10 +62,7 @@ async function proxyBridge(pathname: string, init?: RequestInit) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     }
 
-    const message =
-      error instanceof Error
-        ? `Local bridge is offline. Start services/local-bridge on http://127.0.0.1:4242. ${error.message}`
-        : "Local bridge is offline. Start services/local-bridge on http://127.0.0.1:4242.";
+    const message = error instanceof Error ? error.message : "Relay could not complete the bridge request right now.";
 
     return NextResponse.json({ error: message }, { status: 502 });
   }

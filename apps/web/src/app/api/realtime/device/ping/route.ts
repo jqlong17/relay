@@ -1,7 +1,9 @@
-import type { RelayAgentEnvelope } from "@relay/shared-types";
-
 import { readBrowserSession } from "@/lib/realtime/browser-session";
-import { getRelayHub } from "@/lib/realtime/relay-hub";
+import {
+  enqueueRelayAgentRequest,
+  getCloudRelayConnectionStatus,
+  waitForPingResponse,
+} from "@/lib/realtime/cloud-relay-store";
 
 type PingRequestBody = {
   deviceId?: string;
@@ -28,23 +30,25 @@ export async function POST(request: Request) {
     return Response.json({ error: "deviceId is required." }, { status: 400 });
   }
 
-  const connectionStatus = getRelayHub().getConnectionStatus(deviceId);
+  const result = await getCloudRelayConnectionStatus(deviceId, session.sub);
 
-  if (!connectionStatus.connected || connectionStatus.userId !== session.sub) {
+  if (!result) {
+    return Response.json({ error: "The requested Relay device is not available for this account." }, { status: 404 });
+  }
+
+  if (!result.status.connected) {
     return Response.json({ error: "The default Relay device is not connected to the cloud relay right now." }, { status: 409 });
   }
 
-  const event: RelayAgentEnvelope = {
-    type: "agent.request",
-    request: {
-      id: crypto.randomUUID(),
-      kind: "ping",
-      sentAt: new Date().toISOString(),
-    },
-  };
-
   try {
-    const response = await getRelayHub().request(deviceId, event, 8_000);
+    const requestId = await enqueueRelayAgentRequest({
+      kind: "ping",
+      localDeviceId: result.device.local_device_id?.trim() ?? "",
+      timeoutMs: 8_000,
+      userId: session.sub,
+    });
+    const response = await waitForPingResponse(requestId, 8_000);
+
     return Response.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "The Relay device did not respond.";

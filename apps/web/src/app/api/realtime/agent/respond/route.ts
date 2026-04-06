@@ -1,7 +1,7 @@
 import type { RelayAgentResponse } from "@relay/shared-types";
 
 import { readAgentAuthorization } from "@/lib/realtime/agent-auth";
-import { getRelayHub } from "@/lib/realtime/relay-hub";
+import { storeRelayAgentResponse } from "@/lib/realtime/cloud-relay-store";
 
 export async function POST(request: Request) {
   const agent = await readAgentAuthorization(request);
@@ -22,10 +22,13 @@ export async function POST(request: Request) {
     return Response.json({ error: "Relay agent identity does not match the response payload." }, { status: 403 });
   }
 
-  const resolved = getRelayHub().resolve(payload);
-
-  if (!resolved) {
-    return Response.json({ error: "The pending realtime request could not be found." }, { status: 404 });
+  try {
+    await storeRelayAgentResponse(payload);
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "The relay agent response could not be stored." },
+      { status: 400 },
+    );
   }
 
   return Response.json({ ok: true });

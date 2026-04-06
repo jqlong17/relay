@@ -1,8 +1,9 @@
 import { readAgentAuthorization } from "@/lib/realtime/agent-auth";
-import { getRelayHub } from "@/lib/realtime/relay-hub";
+import { claimRelayAgentRequest } from "@/lib/realtime/cloud-relay-store";
 
 const textEncoder = new TextEncoder();
 const KEEPALIVE_INTERVAL_MS = 15_000;
+const REQUEST_POLL_INTERVAL_MS = 1_000;
 
 function encodeSseChunk(chunk: string) {
   return textEncoder.encode(chunk);
@@ -15,8 +16,6 @@ export async function GET(request: Request) {
     return Response.json({ error: "Relay agent authorization is invalid." }, { status: 401 });
   }
 
-  const relayHub = getRelayHub();
-  const connectionId = crypto.randomUUID();
   let cleanup = () => {};
 
   const stream = new ReadableStream<Uint8Array>({
@@ -30,7 +29,6 @@ export async function GET(request: Request) {
 
         closed = true;
         clearInterval(keepaliveTimer);
-        relayHub.unregisterAgent(agent.deviceId, connectionId);
 
         try {
           controller.close();
@@ -49,14 +47,6 @@ export async function GET(request: Request) {
         }
       };
 
-      relayHub.registerAgent({
-        connectionId,
-        connectedAt: new Date().toISOString(),
-        deviceId: agent.deviceId,
-        send,
-        userId: agent.userId,
-      });
-
       controller.enqueue(encodeSseChunk(": connected\n\n"));
 
       const keepaliveTimer = setInterval(() => {
@@ -70,6 +60,30 @@ export async function GET(request: Request) {
           cleanup();
         }
       }, KEEPALIVE_INTERVAL_MS);
+
+      void (async () => {
+        while (!closed && !request.signal.aborted) {
+          try {
+            const envelope = await claimRelayAgentRequest(agent.userId, agent.deviceId);
+
+            if (envelope) {
+              send(envelope);
+              continue;
+            }
+          } catch (error) {
+            try {
+              controller.enqueue(encodeSseChunk(`: error ${(error as Error).message}\n\n`));
+            } catch {
+              cleanup();
+              return;
+            }
+          }
+
+          await new Promise((resolve) => {
+            setTimeout(resolve, REQUEST_POLL_INTERVAL_MS);
+          });
+        }
+      })();
 
       request.signal.addEventListener("abort", cleanup, { once: true });
     },

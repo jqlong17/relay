@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const relayHubMocks = vi.hoisted(() => ({
-  requestBridge: vi.fn(),
+const cloudRelayStoreMocks = vi.hoisted(() => ({
+  requestRemoteBridge: vi.fn(),
 }));
 const bridgeTargetMocks = vi.hoisted(() => ({
   resolveBridgeRouteStatus: vi.fn(),
 }));
+const sessionMocks = vi.hoisted(() => ({
+  readSessionToken: vi.fn(),
+}));
+const cookieMocks = vi.hoisted(() => ({
+  cookies: vi.fn(),
+}));
 
-vi.mock("@/lib/realtime/relay-hub", () => ({
-  getRelayHub: () => ({
-    requestBridge: relayHubMocks.requestBridge,
-  }),
+vi.mock("@/lib/realtime/cloud-relay-store", () => ({
+  requestRemoteBridge: cloudRelayStoreMocks.requestRemoteBridge,
 }));
 
 vi.mock("@/lib/realtime/bridge-target", () => ({
@@ -18,11 +22,26 @@ vi.mock("@/lib/realtime/bridge-target", () => ({
   resolveBridgeRouteStatus: bridgeTargetMocks.resolveBridgeRouteStatus,
 }));
 
+vi.mock("next/headers", () => ({
+  cookies: cookieMocks.cookies,
+}));
+
+vi.mock("@/lib/auth/session", () => ({
+  readSessionToken: sessionMocks.readSessionToken,
+}));
+
 import { proxyBridge } from "../../src/app/api/bridge/_lib";
 
 describe("bridge proxy lib", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    cookieMocks.cookies.mockResolvedValue({
+      get: vi.fn().mockReturnValue({ value: "relay-session-token" }),
+    });
+    sessionMocks.readSessionToken.mockResolvedValue({
+      method: "github",
+      sub: "user-1",
+    });
   });
 
   afterEach(() => {
@@ -50,7 +69,7 @@ describe("bridge proxy lib", () => {
     const response = await proxyBridge("/sessions");
 
     expect(response.status).toBe(200);
-    expect(relayHubMocks.requestBridge).not.toHaveBeenCalled();
+    expect(cloudRelayStoreMocks.requestRemoteBridge).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({ ok: true, source: "local" });
   });
 
@@ -75,7 +94,7 @@ describe("bridge proxy lib", () => {
       reason: "remote_default_device_online",
       defaultLocalDeviceId: "device-1",
     });
-    relayHubMocks.requestBridge.mockResolvedValue(
+    cloudRelayStoreMocks.requestRemoteBridge.mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: {
@@ -87,7 +106,15 @@ describe("bridge proxy lib", () => {
     const response = await proxyBridge("/sessions");
 
     expect(response.status).toBe(200);
-    expect(relayHubMocks.requestBridge).toHaveBeenCalledOnce();
+    expect(cloudRelayStoreMocks.requestRemoteBridge).toHaveBeenCalledOnce();
+    expect(cloudRelayStoreMocks.requestRemoteBridge).toHaveBeenCalledWith({
+      body: undefined,
+      headers: {},
+      localDeviceId: "device-1",
+      method: "GET",
+      path: "/sessions",
+      userId: "user-1",
+    });
     await expect(response.json()).resolves.toEqual({ ok: true });
   });
 });

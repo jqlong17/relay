@@ -1,5 +1,5 @@
 import { readBrowserSession } from "@/lib/realtime/browser-session";
-import { getRelayHub } from "@/lib/realtime/relay-hub";
+import { getCloudRelayConnectionStatus } from "@/lib/realtime/cloud-relay-store";
 
 export async function GET(request: Request) {
   const session = await readBrowserSession(request);
@@ -15,11 +15,11 @@ export async function GET(request: Request) {
     return Response.json({ error: "deviceId is required." }, { status: 400 });
   }
 
-  const status = getRelayHub().getConnectionStatus(deviceId);
+  const result = await getCloudRelayConnectionStatus(deviceId, session.sub);
 
-  if (status.userId && status.userId !== session.sub) {
+  if (!result) {
     return Response.json({ error: "The requested Relay device is not available for this account." }, { status: 404 });
   }
 
-  return Response.json(status);
+  return Response.json(result.status);
 }

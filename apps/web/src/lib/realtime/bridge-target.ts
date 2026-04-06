@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 
 import { readSessionToken } from "@/lib/auth/session";
 import { createAuthenticatedSupabaseServerClientFromCookieHeader } from "@/lib/auth/server-supabase-session";
-import { getRelayHub } from "@/lib/realtime/relay-hub";
+import { isFreshTimestamp } from "@/lib/realtime/cloud-relay-store";
 
 type BridgeRouteStatus =
   | {
@@ -30,6 +30,8 @@ type BridgeRouteStatus =
 type SupabaseDeviceRow = {
   id?: string;
   local_device_id?: string;
+  last_seen_at?: string | null;
+  status?: "online" | "offline";
 };
 
 type CurrentLocalDevice = {
@@ -78,7 +80,7 @@ async function resolveBridgeRouteStatus(): Promise<BridgeRouteStatus> {
     const { supabase } = await createAuthenticatedSupabaseServerClientFromCookieHeader(cookieHeader);
     const [{ data: preferenceData, error: preferenceError }, { data: devicesData, error: devicesError }] = await Promise.all([
       supabase.from("user_device_preferences").select("default_device_id").maybeSingle(),
-      supabase.from("devices").select("id, local_device_id"),
+      supabase.from("devices").select("id, local_device_id, status, last_seen_at"),
     ]);
 
     if (preferenceError || devicesError) {
@@ -136,9 +138,10 @@ async function resolveBridgeRouteStatus(): Promise<BridgeRouteStatus> {
       };
     }
 
-    const status = getRelayHub().getConnectionStatus(defaultLocalDeviceId);
+    const isDefaultDeviceOnline =
+      defaultDevice?.status !== "offline" && isFreshTimestamp(defaultDevice?.last_seen_at);
 
-    if (!status.connected || status.userId !== relaySession.sub) {
+    if (!isDefaultDeviceOnline) {
       return isCurrentLocalDeviceOwnedByUser
         ? {
             kind: "local",
