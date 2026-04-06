@@ -1,0 +1,434 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		33A3C6B1804E03A39C375ED2 /* RelayHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46775B9ACD6297A7E44003D8 /* RelayHomeView.swift */; };
+		4C8DE29622B99DB1F8232707 /* RelayRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA8FF03BF400DE030DD09239 /* RelayRootView.swift */; };
+		7A836BAA887650B5C3AA377A /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 341A6E6B65973EFF24B634DC /* SessionThreadView.swift */; };
+		81F0B91B341E82CF6D361B8E /* RelayIOSKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1989600C0E7B62B0013566FE /* RelayIOSKit */; };
+		8BBBDDEA437DC0C5791E754C /* AuthGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D496B0C2CB79F3F86497DFE6 /* AuthGateView.swift */; };
+		B6FC8E4B59EDACDB05235156 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 082326B15CE282483E8F5C78 /* AppEnvironment.swift */; };
+		D973BA85CC6C78D113E9D9C1 /* RelayGitHubSignInController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6806C21AD1300C7C8A6F99FA /* RelayGitHubSignInController.swift */; };
+		FEE70FA19B528C502A60670B /* RelayIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15139AB1F771D00C5339F6F3 /* RelayIOSApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		082326B15CE282483E8F5C78 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
+		091600471214EF5D0A992047 /* RelayIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RelayIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		15139AB1F771D00C5339F6F3 /* RelayIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayIOSApp.swift; sourceTree = "<group>"; };
+		341A6E6B65973EFF24B634DC /* SessionThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionThreadView.swift; sourceTree = "<group>"; };
+		46775B9ACD6297A7E44003D8 /* RelayHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayHomeView.swift; sourceTree = "<group>"; };
+		66D398CA27629795E55A55C2 /* RelayIOSKit */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RelayIOSKit; sourceTree = SOURCE_ROOT; };
+		6806C21AD1300C7C8A6F99FA /* RelayGitHubSignInController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayGitHubSignInController.swift; sourceTree = "<group>"; };
+		D496B0C2CB79F3F86497DFE6 /* AuthGateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthGateView.swift; sourceTree = "<group>"; };
+		EA8FF03BF400DE030DD09239 /* RelayRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRootView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CD9C024DA80562668368A67F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				81F0B91B341E82CF6D361B8E /* RelayIOSKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1ACEFF38EBE24C695EB786A0 /* RelayIOS */ = {
+			isa = PBXGroup;
+			children = (
+				68AF58A0ED6B065A81801560 /* App */,
+				D35EB46DC08D030C48FE98EC /* Auth */,
+				36D7C35DC4CC28823E218ED8 /* Core */,
+				F54345E45A5267109FB0F9B9 /* Features */,
+			);
+			path = RelayIOS;
+			sourceTree = "<group>";
+		};
+		36D7C35DC4CC28823E218ED8 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				082326B15CE282483E8F5C78 /* AppEnvironment.swift */,
+				EA8FF03BF400DE030DD09239 /* RelayRootView.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		529333153E19364E8E1BCC04 = {
+			isa = PBXGroup;
+			children = (
+				DA4CFB50805540421BFBDA62 /* Packages */,
+				1ACEFF38EBE24C695EB786A0 /* RelayIOS */,
+				65C05AD0C67D56E1049290E0 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		65C05AD0C67D56E1049290E0 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				091600471214EF5D0A992047 /* RelayIOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		68AF58A0ED6B065A81801560 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				15139AB1F771D00C5339F6F3 /* RelayIOSApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		741E069131B6A08C15C858EB /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				D496B0C2CB79F3F86497DFE6 /* AuthGateView.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		75AB91BDE57F52E0EC5BCA44 /* Sessions */ = {
+			isa = PBXGroup;
+			children = (
+				341A6E6B65973EFF24B634DC /* SessionThreadView.swift */,
+			);
+			path = Sessions;
+			sourceTree = "<group>";
+		};
+		D35EB46DC08D030C48FE98EC /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				6806C21AD1300C7C8A6F99FA /* RelayGitHubSignInController.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		DA4CFB50805540421BFBDA62 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				66D398CA27629795E55A55C2 /* RelayIOSKit */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		DF195DC5063A3BD28427A67A /* RelayHome */ = {
+			isa = PBXGroup;
+			children = (
+				46775B9ACD6297A7E44003D8 /* RelayHomeView.swift */,
+			);
+			path = RelayHome;
+			sourceTree = "<group>";
+		};
+		F54345E45A5267109FB0F9B9 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				741E069131B6A08C15C858EB /* Auth */,
+				DF195DC5063A3BD28427A67A /* RelayHome */,
+				75AB91BDE57F52E0EC5BCA44 /* Sessions */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6E35EAF8A42025D74507E63C /* RelayIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A33A708F9E939FCE171EAC24 /* Build configuration list for PBXNativeTarget "RelayIOS" */;
+			buildPhases = (
+				E1DBB2AA8EF40C27F8B2B775 /* Sources */,
+				CD9C024DA80562668368A67F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RelayIOS;
+			packageProductDependencies = (
+				1989600C0E7B62B0013566FE /* RelayIOSKit */,
+			);
+			productName = RelayIOS;
+			productReference = 091600471214EF5D0A992047 /* RelayIOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		52898163319FC6E615BDCBDE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					6E35EAF8A42025D74507E63C = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 7CEB3275B727AFDC9F024ED1 /* Build configuration list for PBXProject "RelayIOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 529333153E19364E8E1BCC04;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				3AE486A068AE003431EAB503 /* XCLocalSwiftPackageReference "RelayIOSKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 65C05AD0C67D56E1049290E0 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				6E35EAF8A42025D74507E63C /* RelayIOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E1DBB2AA8EF40C27F8B2B775 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B6FC8E4B59EDACDB05235156 /* AppEnvironment.swift in Sources */,
+				8BBBDDEA437DC0C5791E754C /* AuthGateView.swift in Sources */,
+				D973BA85CC6C78D113E9D9C1 /* RelayGitHubSignInController.swift in Sources */,
+				33A3C6B1804E03A39C375ED2 /* RelayHomeView.swift in Sources */,
+				FEE70FA19B528C502A60670B /* RelayIOSApp.swift in Sources */,
+				4C8DE29622B99DB1F8232707 /* RelayRootView.swift in Sources */,
+				7A836BAA887650B5C3AA377A /* SessionThreadView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0066C129E6F757DA8E364964 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Relay;
+				INFOPLIST_KEY_CFBundleURLTypes = "[[\"CFBundleTypeRole\": \"Editor\", \"CFBundleURLName\": \"com.relay.ios.auth\", \"CFBundleURLSchemes\": [\"relayios\"]]]";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiaqilong.relayios;
+				PRODUCT_NAME = RelayIOS;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		2B8A22B9FF8B4915DF240F6C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = T626DDUR47;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8C6C8E4B6DD455DAD7422D3A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = T626DDUR47;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		F67C59175F7BC62F84EFC51F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Relay;
+				INFOPLIST_KEY_CFBundleURLTypes = "[[\"CFBundleTypeRole\": \"Editor\", \"CFBundleURLName\": \"com.relay.ios.auth\", \"CFBundleURLSchemes\": [\"relayios\"]]]";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiaqilong.relayios;
+				PRODUCT_NAME = RelayIOS;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7CEB3275B727AFDC9F024ED1 /* Build configuration list for PBXProject "RelayIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2B8A22B9FF8B4915DF240F6C /* Debug */,
+				8C6C8E4B6DD455DAD7422D3A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A33A708F9E939FCE171EAC24 /* Build configuration list for PBXNativeTarget "RelayIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F67C59175F7BC62F84EFC51F /* Debug */,
+				0066C129E6F757DA8E364964 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		3AE486A068AE003431EAB503 /* XCLocalSwiftPackageReference "RelayIOSKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = RelayIOSKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1989600C0E7B62B0013566FE /* RelayIOSKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RelayIOSKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 52898163319FC6E615BDCBDE /* Project object */;
+}

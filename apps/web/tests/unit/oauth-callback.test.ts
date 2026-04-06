@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveOAuthCallbackAccessToken } from "../../src/lib/auth/oauth-callback";
+import {
+  buildIOSAuthCallbackRedirect,
+  normalizeIOSAuthCallbackTarget,
+  resolveOAuthCallbackAccessToken,
+} from "../../src/lib/auth/oauth-callback";
 
 function createStorage(initial: Record<string, string> = {}) {
   const store = new Map(Object.entries(initial));
@@ -128,5 +132,32 @@ describe("oauth callback helper", () => {
     ).rejects.toThrow("exchange failed");
 
     expect(storage.getItem("relay.oauth.callback.oauth-code")).toBeNull();
+  });
+
+  it("normalizes the iPhone callback target to the Relay URL scheme", () => {
+    expect(normalizeIOSAuthCallbackTarget("relayios://auth/callback")).toBe("relayios://auth/callback");
+    expect(normalizeIOSAuthCallbackTarget("https://example.com")).toBe("relayios://auth/callback");
+    expect(normalizeIOSAuthCallbackTarget(null)).toBe("relayios://auth/callback");
+  });
+
+  it("builds a Relay iPhone callback redirect with Supabase session tokens", () => {
+    expect(
+      buildIOSAuthCallbackRedirect({
+        callbackTarget: "relayios://auth/callback",
+        sessionTokens: {
+          accessToken: "token-a",
+          refreshToken: "token-b",
+        },
+      }),
+    ).toBe("relayios://auth/callback?access_token=token-a&refresh_token=token-b");
+  });
+
+  it("builds a Relay iPhone callback redirect with an OAuth error", () => {
+    expect(
+      buildIOSAuthCallbackRedirect({
+        callbackTarget: "relayios://auth/callback",
+        error: "GitHub sign-in failed",
+      }),
+    ).toBe("relayios://auth/callback?error=oauth_callback_failed&error_description=GitHub+sign-in+failed");
   });
 });

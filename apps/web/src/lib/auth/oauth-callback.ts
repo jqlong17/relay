@@ -20,6 +20,7 @@ type SupabaseOAuthClient = {
 type StorageLike = Pick<Storage, "getItem" | "removeItem" | "setItem">;
 
 const OAUTH_CALLBACK_STORAGE_PREFIX = "relay.oauth.callback.";
+const DEFAULT_IOS_AUTH_CALLBACK_TARGET = "relayios://auth/callback";
 
 function buildOAuthCallbackStorageKey(code: string) {
   return `${OAUTH_CALLBACK_STORAGE_PREFIX}${code}`;
@@ -109,4 +110,53 @@ export async function resolveOAuthCallbackAccessToken({
     storage?.removeItem(storageKey);
     throw error;
   }
+}
+
+export function normalizeIOSAuthCallbackTarget(
+  value: string | null | undefined,
+  fallback: string = DEFAULT_IOS_AUTH_CALLBACK_TARGET,
+) {
+  const candidate = value?.trim() || fallback;
+
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "relayios:" ? url.toString() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+type BuildIOSAuthCallbackRedirectOptions = {
+  callbackTarget: string | null | undefined;
+  error?: string | null;
+  sessionTokens?: {
+    accessToken: string;
+    refreshToken: string;
+  } | null;
+};
+
+export function buildIOSAuthCallbackRedirect({
+  callbackTarget,
+  error,
+  sessionTokens,
+}: BuildIOSAuthCallbackRedirectOptions) {
+  const callbackURL = new URL(normalizeIOSAuthCallbackTarget(callbackTarget));
+
+  if (error) {
+    callbackURL.searchParams.set("error", "oauth_callback_failed");
+    callbackURL.searchParams.set("error_description", error);
+    callbackURL.searchParams.delete("access_token");
+    callbackURL.searchParams.delete("refresh_token");
+    return callbackURL.toString();
+  }
+
+  if (!sessionTokens) {
+    throw new Error("Missing iOS auth callback session tokens");
+  }
+
+  callbackURL.searchParams.set("access_token", sessionTokens.accessToken);
+  callbackURL.searchParams.set("refresh_token", sessionTokens.refreshToken);
+  callbackURL.searchParams.delete("error");
+  callbackURL.searchParams.delete("error_description");
+  return callbackURL.toString();
 }
