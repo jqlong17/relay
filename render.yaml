@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: relay-web
+    runtime: node
+    rootDir: .
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter web build
+    startCommand: pnpm --filter web exec next start --hostname 0.0.0.0 --port $PORT
+    healthCheckPath: /login
+    buildFilter:
+      paths:
+        - apps/web/**
+        - packages/shared-auth/**
+        - packages/shared-types/**
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - render.yaml
+    envVars:
+      - key: RELAY_SESSION_SECRET
+        sync: false
+      - key: RELAY_PUBLIC_BASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: RELAY_ACCESS_PASSWORD
+        sync: false

@@ -25,6 +25,8 @@ import {
   uploadSessionImage,
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, SessionAttachment } from "@/lib/api/bridge";
+import type { BridgeRouteStatus } from "@/lib/api/bridge-route-status";
+import type { RelayAuthSessionResponse } from "@/lib/auth/types";
 import { getClipboardImageFiles, readClipboardImageFiles } from "@/lib/clipboard";
 import {
   captureMobileLayoutSnapshot,
@@ -39,6 +41,8 @@ type MobilePanelKey = "workspaces" | "sessions" | "memories";
 
 type MobileShellProps = {
   initialActiveSession: Session | null;
+  initialAuthSession?: RelayAuthSessionResponse["session"] | null;
+  initialDeviceRoute?: BridgeRouteStatus | null;
   initialActiveWorkspace: Workspace | null;
   initialSessions: Session[];
   initialWorkspaces: Workspace[];
@@ -47,6 +51,8 @@ type MobileShellProps = {
 
 export function MobileShell({
   initialActiveSession,
+  initialAuthSession = null,
+  initialDeviceRoute = null,
   initialActiveWorkspace,
   initialSessions,
   initialWorkspaces,
@@ -79,6 +85,7 @@ export function MobileShell({
   const [isDiagnosticsEnabled, setIsDiagnosticsEnabled] = useState(false);
   const [isRunning, startRunTransition] = useTransition();
   const hasInitialSnapshot = initialWorkspaces.length > 0 || initialSessions.length > 0 || initialActiveSession !== null;
+  const shouldAutoRefreshFromBridge = initialDeviceRoute?.kind !== "unavailable";
   const activeSessionId = activeSession?.id ?? null;
   const activeMessageCount = activeSession?.messages.length ?? 0;
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -303,9 +310,11 @@ export function MobileShell({
         cached.activeSession && sessionCacheRef.current.set(cached.activeSession.id, cached.activeSession);
         setRestoredFromCache(true);
       }
-      void refreshMobileData(undefined, { silent: true });
+      if (shouldAutoRefreshFromBridge) {
+        void refreshMobileData(undefined, { silent: true });
+      }
     }
-  }, [hasInitialSnapshot, refreshMobileData]);
+  }, [hasInitialSnapshot, refreshMobileData, shouldAutoRefreshFromBridge]);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -822,6 +831,17 @@ export function MobileShell({
     syncLayoutMetrics("composer.remove-attachment");
   }
 
+  const hasUsableConnection = initialDeviceRoute
+    ? initialDeviceRoute.kind !== "unavailable"
+    : workspaces.length > 0 || sessions.length > 0 || activeSession !== null;
+  const connectionBanner = !error
+    ? resolveMobileConnectionBanner({
+        authSession: initialAuthSession,
+        messages,
+        routeStatus: initialDeviceRoute,
+      })
+    : null;
+
   const statusLabel = error
     ? messages.mobile.offline
     : isRunActive || isRunning
@@ -836,7 +856,9 @@ export function MobileShell({
               ? messages.mobile.syncing
               : restoredFromCache
                 ? messages.mobile.restored
-                : messages.mobile.online;
+                : hasUsableConnection
+                  ? messages.mobile.online
+                  : messages.mobile.offline;
 
   const statusDetail = error
     ? error
@@ -851,8 +873,8 @@ export function MobileShell({
             : pendingSessionId === "__creating__"
               ? messages.mobile.creatingSession
               : pendingSessionId
-            ? messages.mobile.switchingSession
-                : "";
+              ? messages.mobile.switchingSession
+              : connectionBanner?.title ?? "";
   return (
     <main className="mobile-app" ref={appRef}>
       <div className="mobile-topbar" ref={topbarRef}>
@@ -879,6 +901,12 @@ export function MobileShell({
 
         {error ? <div className="mobile-banner mobile-banner-error">{error}</div> : null}
         {!error && isLoading ? <div className="mobile-banner">{messages.workspace.loading}</div> : null}
+        {!error && !isLoading && connectionBanner?.detail ? (
+          <div className={`mobile-banner mobile-banner-${connectionBanner.tone}`}>
+            <div className="mobile-banner-title">{connectionBanner.title}</div>
+            <div className="mobile-banner-detail">{connectionBanner.detail}</div>
+          </div>
+        ) : null}
       </div>
 
       <MobileThread
@@ -972,6 +1000,106 @@ export function MobileShell({
       />
     </main>
   );
+}
+
+type MobileConnectionBanner = {
+  detail: string;
+  title: string;
+  tone: "neutral" | "success" | "warning";
+};
+
+function resolveMobileConnectionBanner({
+  authSession,
+  messages,
+  routeStatus,
+}: {
+  authSession: RelayAuthSessionResponse["session"] | null | undefined;
+  messages: ReturnType<typeof getMessages>;
+  routeStatus: BridgeRouteStatus | null | undefined;
+}): MobileConnectionBanner | null {
+  if (authSession?.method !== "github") {
+    return {
+      detail: messages.mobile.relayIntroHint,
+      title: messages.mobile.relayIntro,
+      tone: "neutral",
+    };
+  }
+
+  if (!routeStatus) {
+    return null;
+  }
+
+  if (routeStatus.kind === "remote") {
+    return {
+      detail: messages.mobile.relayReadyHint,
+      title: messages.mobile.relayReady,
+      tone: "success",
+    };
+  }
+
+  if (routeStatus.kind === "local") {
+    switch (routeStatus.reason) {
+      case "local_device_matches_default":
+        return {
+          detail: messages.mobile.relayUsingCurrentComputerHint,
+          title: messages.mobile.relayUsingCurrentComputer,
+          tone: "success",
+        };
+      case "default_device_offline_using_local":
+      case "default_device_missing_using_local":
+        return {
+          detail: messages.mobile.relayFallbackCurrentComputerHint,
+          title: messages.mobile.relayFallbackCurrentComputer,
+          tone: "warning",
+        };
+      case "no_default_device_using_local":
+        return {
+          detail: messages.mobile.relayNeedsDefaultHint,
+          title: messages.mobile.relayNeedsDefault,
+          tone: "warning",
+        };
+      case "local_bridge_available":
+        return {
+          detail: messages.mobile.relayUsingCurrentComputerHint,
+          title: messages.mobile.relayUsingCurrentComputer,
+          tone: "success",
+        };
+      default:
+        return {
+          detail: messages.mobile.relayIntroHint,
+          title: messages.mobile.relayIntro,
+          tone: "neutral",
+        };
+    }
+  }
+
+  switch (routeStatus.reason) {
+    case "default_device_offline":
+      return {
+        detail: messages.mobile.relayDefaultOfflineHint,
+        title: messages.mobile.relayDefaultOffline,
+        tone: "warning",
+      };
+    case "default_device_missing":
+    case "no_default_device":
+      return {
+        detail: messages.mobile.relayNeedsDefaultHint,
+        title: messages.mobile.relayNeedsDefault,
+        tone: "warning",
+      };
+    case "github_session_expired":
+      return {
+        detail: messages.mobile.relaySessionExpiredHint,
+        title: messages.mobile.relaySessionExpired,
+        tone: "warning",
+      };
+    default:
+      return {
+        detail: messages.mobile.relayUnavailableHint,
+        title: messages.mobile.relayUnavailable,
+        tone: "warning",
+      };
+  }
 }
 
 async function loadSessionDetail(

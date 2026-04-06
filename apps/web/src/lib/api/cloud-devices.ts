@@ -104,4 +104,23 @@ async function setDefaultDevice(deviceId: string) {
   return resolvedDefaultDeviceId;
 }
 
-export { DEVICE_ONLINE_TTL_MS, loadDeviceDirectory, setDefaultDevice };
+async function deleteCloudDevice(deviceId: string) {
+  const normalizedDeviceId = deviceId.trim();
+
+  if (!normalizedDeviceId) {
+    throw new Error("Device id is required.");
+  }
+
+  const response = await fetch(`/api/cloud/devices/${encodeURIComponent(normalizedDeviceId)}`, {
+    method: "DELETE",
+  });
+  const payload = (await response.json().catch(() => null)) as { deletedDeviceId?: string; error?: string } | null;
+
+  if (!response.ok) {
+    throw new Error(toErrorMessage(payload, "Failed to delete the device."));
+  }
+
+  return payload?.deletedDeviceId?.trim() ?? normalizedDeviceId;
+}
+
+export { DEVICE_ONLINE_TTL_MS, deleteCloudDevice, loadDeviceDirectory, setDefaultDevice };

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayHubMocks = vi.hoisted(() => ({
   requestBridge: vi.fn(),
@@ -23,6 +23,35 @@ import { proxyBridge } from "../../src/app/api/bridge/_lib";
 describe("bridge proxy lib", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to the local bridge when the current machine already took over", async () => {
+    bridgeTargetMocks.resolveBridgeRouteStatus.mockResolvedValue({
+      kind: "local",
+      reason: "default_device_offline_using_local",
+      defaultLocalDeviceId: "device-1",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ok: true, source: "local" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+      ),
+    );
+
+    const response = await proxyBridge("/sessions");
+
+    expect(response.status).toBe(200);
+    expect(relayHubMocks.requestBridge).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ ok: true, source: "local" });
   });
 
   it("returns 409 when no usable remote bridge route is available", async () => {

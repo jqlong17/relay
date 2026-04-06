@@ -45,3 +45,12 @@ Automation lets users define recurring or long-horizon execution tied to concret
 ![Relay settings](docs/images/settings.png)
 
 Settings are file-driven, so product behavior can be managed through TOML rather than UI toggles.
+
+## Deployment
+
+Render and public-network acceptance notes live in:
+
+- [`docs/render-acceptance.md`](/Users/ruska/project/web-cli/docs/render-acceptance.md)
+- [`render.yaml`](/Users/ruska/project/web-cli/render.yaml)
+
+For `v0.1.6`, GitHub login is handled through the Supabase GitHub provider, so the web app itself only needs the Relay session secret and Supabase public credentials at runtime.

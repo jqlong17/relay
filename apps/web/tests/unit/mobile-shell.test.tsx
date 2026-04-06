@@ -93,6 +93,67 @@ describe("MobileShell", () => {
     expect(screen.queryByText("loading...")).toBeNull();
   });
 
+  it("shows a direct handoff state when the default device is online", async () => {
+    render(
+      <MobileShell
+        initialActiveSession={makeSessionDetail({
+          id: "session-1",
+          title: "alpha",
+          workspaceId: "workspace-1",
+          messages: [makeMessage({ role: "assistant", content: "latest reply" })],
+        })}
+        initialActiveWorkspace={makeWorkspace({ id: "workspace-1", name: "web-cli", isActive: true })}
+        initialAuthSession={{
+          method: "github",
+          provider: "github",
+          userId: "user-1",
+        }}
+        initialDeviceRoute={{
+          kind: "remote",
+          reason: "remote_default_device_online",
+          defaultLocalDeviceId: "local-device-1",
+        }}
+        initialSessions={[makeSessionSummary({ id: "session-1", title: "alpha", workspaceId: "workspace-1" })]}
+        initialWorkspaces={[makeWorkspace({ id: "workspace-1", name: "web-cli", isActive: true })]}
+        language="en"
+      />,
+    );
+
+    expect(screen.getAllByText("connected to your default computer")).toHaveLength(2);
+    expect(screen.getByText("You can continue the current workspace and session right away.")).toBeTruthy();
+    expect(screen.getByText("latest reply")).toBeTruthy();
+    expect(document.querySelector(".mobile-status-pill")?.textContent).toBe("online");
+  });
+
+  it("shows minimal recovery guidance when the default device is offline", async () => {
+    render(
+      <MobileShell
+        initialActiveSession={null}
+        initialActiveWorkspace={null}
+        initialAuthSession={{
+          method: "github",
+          provider: "github",
+          userId: "user-1",
+        }}
+        initialDeviceRoute={{
+          kind: "unavailable",
+          reason: "default_device_offline",
+          defaultLocalDeviceId: "local-device-1",
+        }}
+        initialSessions={[]}
+        initialWorkspaces={[]}
+        language="en"
+      />,
+    );
+
+    expect(screen.getAllByText("your default computer is offline")).toHaveLength(2);
+    expect(screen.getByText("Keep that computer and Relay running, then refresh here to continue.")).toBeTruthy();
+    expect(document.querySelector(".mobile-status-pill")?.textContent).toBe("offline");
+    expect(bridgeMocks.listWorkspaces).not.toHaveBeenCalled();
+    expect(bridgeMocks.listSessions).not.toHaveBeenCalled();
+    expect(screen.queryByText(/set as default/i)).toBeNull();
+  });
+
   it("opens the drawers from the top-right controls", async () => {
     const activeWorkspace = makeWorkspace({ id: "workspace-1", name: "web-cli", isActive: true });
     render(

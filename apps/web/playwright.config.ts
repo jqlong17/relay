@@ -7,6 +7,7 @@ const relayEnv = readRelayEnv();
 const repoRoot = path.resolve(__dirname, "../..");
 const port = 3000;
 const baseURL = `http://127.0.0.1:${port}`;
+const useProductionServer = process.env.RELAY_E2E_USE_PRODUCTION === "1";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -30,7 +31,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm --filter web exec next dev --port ${port}`,
+    command: useProductionServer
+      ? `pnpm --filter web exec next start --hostname 127.0.0.1 --port ${port}`
+      : `pnpm --filter web exec next dev --port ${port}`,
     cwd: repoRoot,
     env: {
       ...process.env,

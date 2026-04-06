@@ -1,7 +1,14 @@
 type BridgeRouteStatus =
   | {
       kind: "local";
-      reason: "github_not_signed_in" | "local_bridge_available" | "local_device_matches_default" | "no_default_device_using_local";
+      reason:
+        | "github_not_signed_in"
+        | "local_bridge_available"
+        | "local_device_matches_default"
+        | "no_default_device_using_local"
+        | "default_device_offline_using_local"
+        | "default_device_missing_using_local";
+      defaultLocalDeviceId?: string | null;
     }
   | {
       defaultLocalDeviceId: string;

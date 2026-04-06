@@ -54,7 +54,7 @@ import {
   uploadSessionImage,
 } from "@/lib/api/bridge";
 import type { BridgeRuntimeEvent, FilePreview, SessionAttachment } from "@/lib/api/bridge";
-import { loadBridgeRouteStatus } from "@/lib/api/bridge-route-status";
+import { loadBridgeRouteStatus, type BridgeRouteStatus } from "@/lib/api/bridge-route-status";
 import { loadDeviceDirectory } from "@/lib/api/cloud-devices";
 import { ensureCurrentGitHubDeviceReady } from "@/lib/auth/device-bootstrap";
 import type { RelayAuthSessionResponse } from "@/lib/auth/types";
@@ -160,6 +160,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const [authSession, setAuthSession] = useState<RelayAuthSessionResponse["session"] | null>(null);
   const [deviceDirectory, setDeviceDirectory] = useState<RelayDeviceDirectory | null>(null);
   const [deviceRouteError, setDeviceRouteError] = useState<string | null>(null);
+  const [deviceRoute, setDeviceRoute] = useState<BridgeRouteStatus | null>(null);
   const [deviceRouteState, setDeviceRouteState] = useState<WorkspaceDeviceRouteState>("idle");
   const [localRelayDevice, setLocalRelayDevice] = useState<RelayDevice | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -318,6 +319,10 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   }, [layoutWidths.sidepanelPrimary, workspaceLayout.workspaceSidepanelPrimaryWidth]);
   const defaultRelayDevice =
     deviceDirectory?.items.find((item) => item.id === deviceDirectory.defaultDeviceId) ?? null;
+  const isUsingCurrentDeviceFallback =
+    deviceRoute?.kind === "local" &&
+    (deviceRoute.reason === "default_device_offline_using_local" ||
+      deviceRoute.reason === "default_device_missing_using_local");
   const isCloudWebSession =
     authSession?.method === "github" && localRelayDevice === null && deviceDirectory !== null;
   const isUsingDefaultRelayDevice =
@@ -325,11 +330,23 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
   const currentRelayLabel = isCloudWebSession
     ? messages.workspace.publicCloudRelayValue
     : localRelayDevice?.name ?? messages.settings.loading;
+  const workspaceDeviceRecoveryText =
+    deviceRoute?.kind === "unavailable"
+      ? deviceRoute.reason === "github_session_expired"
+        ? messages.workspace.deviceRouteRecoveryLogin
+        : deviceRoute.reason === "default_device_offline" || deviceRoute.reason === "default_device_missing"
+          ? messages.workspace.deviceRouteRecoveryOffline
+          : null
+      : isUsingCurrentDeviceFallback
+        ? messages.workspace.deviceRouteRecoveryDefault
+        : null;
   const workspaceDeviceStatusText =
     deviceRouteState === "loading" && authSession?.method === "github"
       ? messages.workspace.deviceRouteLoading
       : isCloudWebSession
         ? messages.workspace.publicCloudRelayValue
+      : isUsingCurrentDeviceFallback
+        ? messages.workspace.deviceRouteLocalFallback
       : authSession?.method === "github" && defaultRelayDevice
         ? isUsingDefaultRelayDevice
           ? messages.workspace.deviceRouteReady
@@ -587,6 +604,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
             setLocalRelayDevice(result.localDevice);
             setDeviceDirectory(result.directory);
+            setDeviceRoute(routeStatus);
             setDeviceRouteError(
               routeStatus.kind === "unavailable"
                 ? routeStatus.reason === "default_device_offline"
@@ -596,6 +614,10 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
                     : routeStatus.reason === "github_session_expired"
                       ? messages.workspace.githubSessionExpired
                       : messages.workspace.deviceRouteUnavailable
+                : routeStatus.kind === "local" &&
+                    (routeStatus.reason === "default_device_offline_using_local" ||
+                      routeStatus.reason === "default_device_missing_using_local")
+                  ? messages.workspace.deviceRouteLocalFallback
                 : null,
             );
             setDeviceRouteState(routeStatus.kind === "unavailable" ? "error" : "idle");
@@ -618,6 +640,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
               setDeviceDirectory(directory.value);
             }
 
+            setDeviceRoute(null);
             setDeviceRouteError(routeError instanceof Error ? routeError.message : "Failed to resolve Relay device route.");
             setDeviceRouteState("error");
           }
@@ -627,6 +650,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
 
         setDeviceRouteState("idle");
         setDeviceDirectory(null);
+        setDeviceRoute(null);
         setDeviceRouteError(null);
 
         try {
@@ -642,6 +666,7 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
         }
       } catch {
         if (!cancelled) {
+          setDeviceRoute(null);
           setDeviceRouteState("error");
         }
       }
@@ -1574,6 +1599,11 @@ export function WorkspaceClient({ language, layout }: WorkspaceClientProps) {
             <p className="workspace-device-strip-copy">
               {deviceRouteError && authSession?.method === "github" ? deviceRouteError : workspaceDeviceStatusText}
             </p>
+            {workspaceDeviceRecoveryText ? (
+              <p className="workspace-device-strip-copy workspace-device-strip-copy-secondary">
+                {workspaceDeviceRecoveryText}
+              </p>
+            ) : null}
           </section>
         ) : null}
 

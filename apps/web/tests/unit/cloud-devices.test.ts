@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadDeviceDirectory, setDefaultDevice } from "@/lib/api/cloud-devices";
+import { deleteCloudDevice, loadDeviceDirectory, setDefaultDevice } from "@/lib/api/cloud-devices";
 
 describe("cloud devices api", () => {
   const fetchMock = vi.fn();
@@ -114,5 +114,19 @@ describe("cloud devices api", () => {
         method: "POST",
       }),
     );
+  });
+
+  it("deletes a historical device through the Relay server api", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ deletedDeviceId: "cloud-device-2" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(deleteCloudDevice("cloud-device-2")).resolves.toBe("cloud-device-2");
+    expect(fetchMock).toHaveBeenCalledWith("/api/cloud/devices/cloud-device-2", {
+      method: "DELETE",
+    });
   });
 });

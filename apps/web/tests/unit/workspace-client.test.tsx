@@ -308,6 +308,107 @@ describe("WorkspaceClient", () => {
     expect(screen.getByText("当前已连接默认设备")).toBeTruthy();
   });
 
+  it("shows local fallback guidance when the default device is offline but this machine is available", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url === "/api/auth/session") {
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              configured: true,
+              session: {
+                method: "github",
+                provider: "github",
+                userId: "user-1",
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
+        if (url === "/api/bridge/route-status") {
+          return new Response(
+            JSON.stringify({
+              kind: "local",
+              reason: "default_device_offline_using_local",
+              defaultLocalDeviceId: "local-device-legacy",
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<WorkspaceClient language="zh" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("默认设备当前不可用，已自动回退到这台本机设备。")).toBeTruthy();
+    });
+
+    expect(screen.getByText("去设置里把当前在线设备设为默认设备，可以避免下次再进入离线默认设备状态。")).toBeTruthy();
+  });
+
+  it("shows a re-login hint when the GitHub device session expired", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url === "/api/auth/session") {
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              configured: true,
+              session: {
+                method: "github",
+                provider: "github",
+                userId: "user-1",
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
+        if (url === "/api/bridge/route-status") {
+          return new Response(
+            JSON.stringify({
+              kind: "unavailable",
+              reason: "github_session_expired",
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<WorkspaceClient language="zh" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("GitHub 云端会话已过期，请重新登录。")).toBeTruthy();
+    });
+
+    expect(screen.getByText("当前需要重新登录 GitHub，恢复云端会话后才能继续按账号设备路由。")).toBeTruthy();
+  });
+
   it("shows linked goal automation progress and conclusion for the current session", async () => {
     render(<WorkspaceClient language="zh" />);
     const user = userEvent.setup();
